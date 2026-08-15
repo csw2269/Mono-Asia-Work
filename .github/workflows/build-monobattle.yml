@@ -1,4 +1,4 @@
-name: Build Monobattle Alpha 3.3
+name: Build Monobattle Alpha 3.4
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare and validate Galaxy source
-        run: python tools/prepare_alpha33.py
+        run: python tools/prepare_alpha34.py
 
       - name: Validate draft rules with simulation
         run: |
@@ -84,10 +84,10 @@ jobs:
             -lstorm -lz \
             -o tools/mpq_replace
 
-      - name: Build Alpha 3.3 map
+      - name: Build Alpha 3.4 map
         run: |
           mkdir -p dist
-          OUT='dist/Monobattle - 열대 해안 - Alpha3.3.SC2Map'
+          OUT='dist/Monobattle - 열대 해안 - Alpha3.4.SC2Map'
           cp 'Tropic Shores 0.136.SC2Map' "$OUT"
           tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
           tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
@@ -99,7 +99,7 @@ jobs:
           python -m pip install --disable-pip-version-check mpyq
           python - <<'PY'
           from mpyq import MPQArchive
-          p = 'dist/Monobattle - 열대 해안 - Alpha3.3.SC2Map'
+          p = 'dist/Monobattle - 열대 해안 - Alpha3.4.SC2Map'
           raw = MPQArchive(p).extract()
           files = {}
           for k,v in raw.items():
@@ -109,7 +109,9 @@ jobs:
           for marker in (
               'MB_InitStartingUnitsAll','MeleeInitUnitsForPlayer','PlayerSetRace',
               'MB_UnitButtonId','c_gameCatalogButton','CatalogEntryIsValid',
-              'MB_CreateRosterUI','MB_UpdateRosterAll','gv_mbRosterAllyIcon','gv_mbRosterEnemyIcon'
+              'btn-unit-protoss-adept.dds','btn-unit-protoss-disruptor.dds',
+              'MB_CreateRosterUI','MB_UpdateRosterAll',
+              'MB_ApplySupportRulesAll','MedivacHeal','MedivacSpeedBoost'
           ):
               assert marker in script, marker
           assert '"Hellbat"' not in script
@@ -118,13 +120,13 @@ jobs:
           assert 'MeleeInitOptions();' not in script
           assert 'UnitPauseAll(' not in script
           assert script.count('gv_mbTimer = TimerCreate();') == 1
-          print('Alpha 3.3 MPQ verified')
+          print('Alpha 3.4 MPQ verified')
           PY
 
-      - name: Upload Alpha 3.3 map
+      - name: Upload Alpha 3.4 map
         uses: actions/upload-artifact@v4
         with:
-          name: monobattle-tropic-shores-alpha33
-          path: 'dist/Monobattle - 열대 해안 - Alpha3.3.SC2Map'
+          name: monobattle-tropic-shores-alpha34
+          path: 'dist/Monobattle - 열대 해안 - Alpha3.4.SC2Map'
           if-no-files-found: error
           retention-days: 7
