@@ -1,4 +1,4 @@
-name: Build Monobattle Alpha 3.1
+name: Build Monobattle Alpha 3.3
 
 on:
   push:
@@ -21,13 +21,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare and validate Galaxy source
-        run: python tools/prepare_alpha31.py
+        run: python tools/prepare_alpha33.py
 
       - name: Validate draft rules with simulation
         run: |
           python - <<'PY'
           import random
-          T = ['Marine','Marauder','Reaper','Hellion','WidowMine','SiegeTank','Cyclone','Thor','VikingFighter','Banshee','Raven','Battlecruiser','Liberator','Ghost','Hellbat']
+          T = ['Marine','Marauder','Reaper','Hellion','WidowMine','SiegeTank','Cyclone','Thor','VikingFighter','Banshee','Raven','Battlecruiser','Liberator','Ghost','HellionTank']
           Z = ['Zergling','Baneling','Roach','Ravager','Hydralisk','LurkerMP','Infestor','SwarmHostMP','Ultralisk','Mutalisk','Corruptor','BroodLord','Viper','Queen']
           P = ['Zealot','Stalker','Sentry','Adept','HighTemplar','DarkTemplar','Archon','Immortal','Colossus','Disruptor','Phoenix','VoidRay','Oracle','Tempest','Carrier']
           pools = [T,Z,P]
@@ -84,41 +84,47 @@ jobs:
             -lstorm -lz \
             -o tools/mpq_replace
 
-      - name: Build Alpha 3.1 map
+      - name: Build Alpha 3.3 map
         run: |
           mkdir -p dist
-          OUT='dist/Monobattle - 열대 해안 - Alpha3.1.SC2Map'
+          OUT='dist/Monobattle - 열대 해안 - Alpha3.3.SC2Map'
           cp 'Tropic Shores 0.136.SC2Map' "$OUT"
           tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
           tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
           tools/mpq_replace "$OUT" 'build/MapScript.galaxy' 'MapScript.galaxy'
+          sha256sum "$OUT"
 
       - name: Verify rebuilt MPQ
         run: |
           python -m pip install --disable-pip-version-check mpyq
           python - <<'PY'
           from mpyq import MPQArchive
-          p = 'dist/Monobattle - 열대 해안 - Alpha3.1.SC2Map'
+          p = 'dist/Monobattle - 열대 해안 - Alpha3.3.SC2Map'
           raw = MPQArchive(p).extract()
           files = {}
           for k,v in raw.items():
               key = k.decode('utf-8','replace') if isinstance(k,bytes) else str(k)
               files[key.replace('\\','/')] = bytes(v)
           script = files['MapScript.galaxy'].decode('utf-8-sig')
-          for marker in ('MB_InitStartingUnitsAll','MeleeInitUnitsForPlayer','PlayerSetRace','MB_UnitIcon','gv_mbSDNameLabel'):
+          for marker in (
+              'MB_InitStartingUnitsAll','MeleeInitUnitsForPlayer','PlayerSetRace',
+              'MB_UnitButtonId','c_gameCatalogButton','CatalogEntryIsValid',
+              'MB_CreateRosterUI','MB_UpdateRosterAll','gv_mbRosterAllyIcon','gv_mbRosterEnemyIcon'
+          ):
               assert marker in script, marker
+          assert '"Hellbat"' not in script
+          assert '"HellionTank"' in script
           assert '    MeleeInitUnits();' not in script
           assert 'MeleeInitOptions();' not in script
           assert 'UnitPauseAll(' not in script
-          assert 'MB_ResetVoteButtonTextFor(p)' not in script
           assert script.count('gv_mbTimer = TimerCreate();') == 1
-          print('Alpha 3.1 MPQ verified')
+          print('Alpha 3.3 MPQ verified')
           PY
 
-      - name: Upload Alpha 3.1 map
+      - name: Upload Alpha 3.3 map
         uses: actions/upload-artifact@v4
         with:
-          name: monobattle-tropic-shores-alpha31
-          path: 'dist/Monobattle - 열대 해안 - Alpha3.1.SC2Map'
+          name: monobattle-tropic-shores-alpha33
+          path: 'dist/Monobattle - 열대 해안 - Alpha3.3.SC2Map'
           if-no-files-found: error
           retention-days: 7
