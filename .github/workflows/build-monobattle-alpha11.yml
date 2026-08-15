@@ -1,0 +1,168 @@
+name: Build Monobattle Alpha 1.1
+
+on:
+  push:
+    branches:
+      - 'dev/monobattle-v0.1'
+    paths:
+      - '.github/workflows/build-monobattle-alpha11.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Alpha 1.1 MapScript
+        run: |
+          mkdir -p build
+          python - <<'PY'
+          from pathlib import Path
+          import re, random
+
+          src = Path('overlay/MapScript.galaxy').read_text(encoding='utf-8')
+
+          # Alpha 1 source accidentally contains two timer creations. Keep the first only.
+          timer_line = '    gv_mbTimer = TimerCreate();\n'
+          if src.count(timer_line) != 2:
+              raise SystemExit(f'unexpected timer init count: {src.count(timer_line)}')
+          first = src.find(timer_line)
+          second = src.find(timer_line, first + len(timer_line))
+          fixed = src[:second] + src[second + len(timer_line):]
+
+          # MeleeInitOptions installs the stock melee win/loss behavior. That causes an
+          # immediate solo-test victory and will conflict with the later shuffled-team
+          # Monobattle victory system, so Alpha 1.1 deliberately removes it.
+          melee_options = '    MeleeInitOptions();\n'
+          if fixed.count(melee_options) != 1:
+              raise SystemExit('expected exactly one MeleeInitOptions call')
+          fixed = fixed.replace(melee_options,
+              '    // MeleeInitOptions intentionally omitted: Monobattle owns victory/defeat.\n', 1)
+
+          if fixed.count(timer_line) != 1:
+              raise SystemExit('timer hardening failed')
+          if 'MeleeInitOptions();' in fixed:
+              raise SystemExit('stock melee victory setup still present')
+
+          # Static multiplayer-only checks that cannot be observed with one local player.
+          reveal_start = fixed.index('void MB_UpdateTeamRevealFor')
+          reveal_end = fixed.index('void MB_UpdateAllTeamReveal', reveal_start)
+          reveal = fixed[reveal_start:reveal_end]
+          if 'PlayerGroupAlliance(c_playerGroupAlly, viewer)' not in reveal:
+              raise SystemExit('team reveal is not ally-scoped')
+          if 'PlayerGroupAll()' in reveal:
+              raise SystemExit('team reveal unexpectedly exposes data to all players')
+
+          reroll_start = fixed.index('void MB_RerollPlayer')
+          reroll_end = fixed.index('int MB_CountVotes', reroll_start)
+          reroll = fixed[reroll_start:reroll_end]
+          free_pos = reroll.index('gv_mbUnit[player] = "";')
+          draw_pos = reroll.index('MB_DrawRandomRace(player, oldUnit)')
+          if free_pos >= draw_pos:
+              raise SystemExit('old rerolled unit is not released before the new draw')
+
+          # Parse the actual Alpha unit pools and stress-test the same occupancy rules.
+          pools = {}
+          for race in ('Terran', 'Zerg', 'Protoss'):
+              entries = re.findall(r'gv_mb' + race + r'\[\d+\] = "([^"]+)";', fixed)
+              if not entries:
+                  raise SystemExit(f'failed to parse {race} pool')
+              pools[race] = entries
+
+          races = list(pools)
+          def draw(race, held, exclude=None):
+              legal = [u for u in pools[race] if u not in held and u != exclude]
+              return random.choice(legal) if legal else None
+
+          for _ in range(10000):
+              held = set()
+              picks = []
+              for _p in range(8):
+                  race = random.choice(races)
+                  u = draw(race, held)
+                  if u is None:
+                      # Random mode falls back across other races if one pool has no legal entry.
+                      legal = [x for r in races for x in pools[r] if x not in held]
+                      u = random.choice(legal)
+                  if u in held:
+                      raise SystemExit('duplicate current ownership generated')
+                  held.add(u)
+                  picks.append(u)
+
+              # Random-player reroll: release old unit first, exclude it only for that player.
+              p = random.randrange(8)
+              old = picks[p]
+              held.remove(old)
+              legal = [x for r in races for x in pools[r] if x not in held and x != old]
+              new = random.choice(legal)
+              if new == old or new in held:
+                  raise SystemExit('invalid reroll result')
+              held.add(new)
+              if old in held:
+                  raise SystemExit('discarded unit did not return to the free pool')
+
+          Path('build/MapScript.galaxy').write_text(fixed, encoding='utf-8', newline='\n')
+          print('Alpha 1.1 script checks passed: unique ownership, reroll release/exclusion, ally-only reveal')
+          PY
+
+      - name: Build StormLib v9.40
+        run: |
+          git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
+          cmake -S _StormLib -B _StormLib/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/_storm" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSTORM_USE_BUNDLED_LIBRARIES=ON \
+            -DSTORM_BUILD_TESTS=OFF
+          cmake --build _StormLib/build --config Release -j2
+          cmake --install _StormLib/build
+
+      - name: Compile MPQ helper
+        run: |
+          cc tools/mpq_replace.c \
+            -I"$PWD/_storm/include" \
+            -L"$PWD/_storm/lib" \
+            -Wl,-rpath,"$PWD/_storm/lib" \
+            -lstorm -lz \
+            -o tools/mpq_replace
+
+      - name: Build Alpha 1.1 map
+        run: |
+          mkdir -p dist
+          OUT='dist/Monobattle - 열대 해안 - Alpha1.1.SC2Map'
+          cp 'Tropic Shores 0.136.SC2Map' "$OUT"
+          tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'build/MapScript.galaxy' 'MapScript.galaxy'
+
+      - name: Verify rebuilt MPQ
+        run: |
+          python -m pip install --disable-pip-version-check mpyq
+          python - <<'PY'
+          from mpyq import MPQArchive
+          p = 'dist/Monobattle - 열대 해안 - Alpha1.1.SC2Map'
+          raw = MPQArchive(p).extract()
+          files = {}
+          for k, v in raw.items():
+              key = k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)
+              files[key.replace('\\', '/')] = bytes(v)
+          script = files['MapScript.galaxy'].decode('utf-8-sig')
+          assert script.count('gv_mbTimer = TimerCreate();') == 1
+          assert 'MeleeInitOptions();' not in script
+          for marker in ('MeleeInitResources();', 'MeleeInitUnits();', 'MB_StartVote', 'MB_RerollPlayer'):
+              assert marker in script, marker
+          print('Alpha 1.1 MPQ verified; stock melee victory setup disabled')
+          PY
+
+      - name: Upload Alpha 1.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: monobattle-tropic-shores-alpha11
+          path: 'dist/Monobattle - 열대 해안 - Alpha1.1.SC2Map'
+          if-no-files-found: error
+          retention-days: 7
