@@ -1,0 +1,82 @@
+name: Build Monobattle Alpha 3.5
+
+on:
+  push:
+    branches:
+      - 'dev/monobattle-v0.1'
+    paths:
+      - 'tools/prepare_alpha35.py'
+      - '.github/workflows/build-monobattle-alpha35.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Alpha 3.5 Galaxy source
+        run: python tools/prepare_alpha35.py
+
+      - name: Verify final source escaping
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('build/MapScript.galaxy').read_text(encoding='utf-8')
+          good_a = r'Assets\\Textures\\btn-unit-protoss-adept.dds'
+          good_d = r'Assets\\Textures\\btn-unit-protoss-disruptor.dds'
+          bad_a = r'Assets\Textures\btn-unit-protoss-adept.dds'
+          bad_d = r'Assets\Textures\btn-unit-protoss-disruptor.dds'
+          assert good_a in s and good_d in s
+          assert bad_a not in s and bad_d not in s
+          for marker in ('MB_ApplySupportRulesAll','MB_CheckTeamVictory','MB_CreateRosterUI'):
+              assert marker in s, marker
+          print('Final Galaxy source contains escaped texture paths and Alpha 3.4 gameplay rules')
+          PY
+
+      - name: Build StormLib v9.40
+        run: |
+          git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
+          cmake -S _StormLib -B _StormLib/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/_storm" -DBUILD_SHARED_LIBS=ON -DSTORM_USE_BUNDLED_LIBRARIES=ON -DSTORM_BUILD_TESTS=OFF
+          cmake --build _StormLib/build --config Release -j2
+          cmake --install _StormLib/build
+
+      - name: Compile MPQ helper
+        run: |
+          cc tools/mpq_replace.c -I"$PWD/_storm/include" -L"$PWD/_storm/lib" -Wl,-rpath,"$PWD/_storm/lib" -lstorm -lz -o tools/mpq_replace
+
+      - name: Build Alpha 3.5 map
+        run: |
+          mkdir -p dist
+          OUT='dist/Monobattle - 열대 해안 - Alpha3.5.SC2Map'
+          cp 'Tropic Shores 0.136.SC2Map' "$OUT"
+          tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'build/MapScript.galaxy' 'MapScript.galaxy'
+
+      - name: Verify packaged MPQ
+        run: |
+          python -m pip install --disable-pip-version-check mpyq
+          python - <<'PY'
+          from mpyq import MPQArchive
+          p = 'dist/Monobattle - 열대 해안 - Alpha3.5.SC2Map'
+          raw = MPQArchive(p).extract()
+          files = {(k.decode('utf-8','replace') if isinstance(k,bytes) else str(k)).replace('\\','/'): bytes(v) for k,v in raw.items()}
+          s = files['MapScript.galaxy'].decode('utf-8-sig')
+          assert r'Assets\\Textures\\btn-unit-protoss-adept.dds' in s
+          assert r'Assets\\Textures\\btn-unit-protoss-disruptor.dds' in s
+          assert 'MB_CheckTeamVictory' in s
+          assert 'MB_ApplySupportRulesAll' in s
+          print('Alpha 3.5 packaged MPQ verified')
+          PY
+
+      - name: Upload Alpha 3.5 map
+        uses: actions/upload-artifact@v4
+        with:
+          name: monobattle-tropic-shores-alpha35
+          path: 'dist/Monobattle - 열대 해안 - Alpha3.5.SC2Map'
+          if-no-files-found: error
+          retention-days: 7
