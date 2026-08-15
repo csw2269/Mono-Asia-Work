@@ -1,6 +1,6 @@
 //==================================================================================================
 // Monobattle - Tropic Shores / 열대 해안
-// Alpha 1: mode vote + Blind Random selection/reveal/reroll prototype
+// Alpha 2: polished UI + Blind Random + Single Draft + first production restriction pass
 //==================================================================================================
 include "TriggerLibs/NativeLib"
 
@@ -14,7 +14,8 @@ void InitLibs () {
 const int MB_PHASE_NONE       = 0;
 const int MB_PHASE_MODE_VOTE  = 1;
 const int MB_PHASE_BLIND      = 2;
-const int MB_PHASE_RUNNING    = 3;
+const int MB_PHASE_SD         = 3;
+const int MB_PHASE_RUNNING    = 4;
 
 const int MB_MODE_NONE        = 0;
 const int MB_MODE_BLIND       = 1;
@@ -26,8 +27,14 @@ const int MB_RACE_ZERG        = 2;
 const int MB_RACE_PROTOSS     = 3;
 const int MB_RACE_RANDOM      = 4;
 
+const int MB_ROLE_DIRECT      = 0;
+const int MB_ROLE_HYBRID      = 1;
+const int MB_ROLE_CASTER      = 2;
+
 const fixed MB_VOTE_SECONDS   = 20.0;
 const fixed MB_BLIND_SECONDS  = 30.0;
+const fixed MB_SD_PICK_SECONDS = 15.0;
+const int MB_SD_CANDIDATES    = 24;
 
 //--------------------------------------------------------------------------------------------------
 // Globals
@@ -48,13 +55,19 @@ string[9] gv_mbPreviousUnit;
 bool[9] gv_mbCanReroll;
 bool[9] gv_mbRerollUsed;
 
+// Modern vote UI
 int gv_mbVoteDialog;
+int gv_mbVoteHeaderPanel;
 int gv_mbVoteTitle;
+int gv_mbVoteSubtitle;
 int gv_mbVoteInfo;
 int gv_mbVoteBlindButton;
 int gv_mbVoteSDButton;
+int gv_mbVoteFooter;
 
+// Blind UI
 int gv_mbBlindDialog;
+int gv_mbBlindHeaderPanel;
 int gv_mbBlindTitle;
 int gv_mbBlindInfo;
 int gv_mbTerranButton;
@@ -62,23 +75,43 @@ int gv_mbZergButton;
 int gv_mbProtossButton;
 int gv_mbRandomButton;
 int gv_mbRerollButton;
-int gv_mbTeamLabel;
+int gv_mbBlindStatus;
+int[4] gv_mbTeamRow;
 
+// Single Draft UI
+int gv_mbSDDialog;
+int gv_mbSDHeaderPanel;
+int gv_mbSDTitle;
+int gv_mbSDInfo;
+int[24] gv_mbSDButton;
+int gv_mbSDOrderLabel;
+int gv_mbSDCurrentLabel;
+int gv_mbSDHintLabel;
+
+// Unit pools
 string[16] gv_mbTerran;
 string[16] gv_mbTerranDisplay;
 int gv_mbTerranCount;
-
 string[16] gv_mbZerg;
 string[16] gv_mbZergDisplay;
 int gv_mbZergCount;
-
 string[16] gv_mbProtoss;
 string[16] gv_mbProtossDisplay;
 int gv_mbProtossCount;
 
+// SD board / order
+string[24] gv_mbSDCandidate;
+bool[24] gv_mbSDTaken;
+int[8] gv_mbTeamAPlayers;
+int gv_mbTeamACount;
+int[8] gv_mbTeamBPlayers;
+int gv_mbTeamBCount;
+int[8] gv_mbSDOrder;
+int gv_mbSDOrderCount;
+int gv_mbSDPickIndex;
+
 //--------------------------------------------------------------------------------------------------
 // Unit pool
-// Alpha baseline. Production/prerequisite rules are deliberately NOT enforced in Alpha 1.
 //--------------------------------------------------------------------------------------------------
 void MB_InitUnitPool () {
     gv_mbTerranCount = 15;
@@ -133,65 +166,101 @@ void MB_InitUnitPool () {
 }
 
 //--------------------------------------------------------------------------------------------------
-// Helpers
+// Unit metadata
 //--------------------------------------------------------------------------------------------------
 bool MB_PlayerActive (int p) {
     return (p >= 1 && p <= 8 && PlayerStatus(p) == c_playerStatusActive);
 }
 
+int MB_PoolCount (int race) {
+    if (race == MB_RACE_TERRAN) { return gv_mbTerranCount; }
+    if (race == MB_RACE_ZERG) { return gv_mbZergCount; }
+    return gv_mbProtossCount;
+}
+
+string MB_PoolUnit (int race, int index) {
+    if (race == MB_RACE_TERRAN) { return gv_mbTerran[index]; }
+    if (race == MB_RACE_ZERG) { return gv_mbZerg[index]; }
+    return gv_mbProtoss[index];
+}
+
+int MB_UnitRace (string unitId) {
+    int i = 0;
+    while (i < gv_mbTerranCount) { if (gv_mbTerran[i] == unitId) { return MB_RACE_TERRAN; } i += 1; }
+    i = 0;
+    while (i < gv_mbZergCount) { if (gv_mbZerg[i] == unitId) { return MB_RACE_ZERG; } i += 1; }
+    return MB_RACE_PROTOSS;
+}
+
+string MB_DisplayName (string unitId) {
+    int i = 0;
+    while (i < gv_mbTerranCount) { if (gv_mbTerran[i] == unitId) { return gv_mbTerranDisplay[i]; } i += 1; }
+    i = 0;
+    while (i < gv_mbZergCount) { if (gv_mbZerg[i] == unitId) { return gv_mbZergDisplay[i]; } i += 1; }
+    i = 0;
+    while (i < gv_mbProtossCount) { if (gv_mbProtoss[i] == unitId) { return gv_mbProtossDisplay[i]; } i += 1; }
+    return unitId;
+}
+
+bool MB_IsAir (string u) {
+    return (u == "VikingFighter" || u == "Banshee" || u == "Raven" || u == "Battlecruiser" || u == "Liberator" ||
+            u == "Mutalisk" || u == "Corruptor" || u == "BroodLord" || u == "Viper" ||
+            u == "Phoenix" || u == "VoidRay" || u == "Oracle" || u == "Tempest" || u == "Carrier");
+}
+
+int MB_UnitRole (string u) {
+    if (u == "Raven" || u == "Infestor" || u == "Viper" || u == "HighTemplar") { return MB_ROLE_CASTER; }
+    if (u == "WidowMine" || u == "Ghost" || u == "Queen" || u == "SwarmHostMP" || u == "Sentry" || u == "Disruptor" || u == "Oracle") { return MB_ROLE_HYBRID; }
+    return MB_ROLE_DIRECT;
+}
+
+bool MB_IsHighWorkload (string u) {
+    return (u == "Raven" || u == "Infestor" || u == "Viper" || u == "HighTemplar" || u == "Disruptor" || u == "Oracle");
+}
+
+int MB_AAScore2 (string u) {
+    // 2 = reliable AA, 1 = conditional/spell AA, 0 = none. Score is doubled to avoid fixed math.
+    if (u == "Marine" || u == "WidowMine" || u == "Cyclone" || u == "Thor" || u == "VikingFighter" ||
+        u == "Battlecruiser" || u == "Liberator" || u == "Ghost" || u == "Hydralisk" || u == "Mutalisk" ||
+        u == "Corruptor" || u == "Queen" || u == "Stalker" || u == "Sentry" || u == "Archon" ||
+        u == "Phoenix" || u == "VoidRay" || u == "Tempest" || u == "Carrier") { return 2; }
+    if (u == "Infestor" || u == "Viper" || u == "HighTemplar") { return 1; }
+    return 0;
+}
+
 bool MB_IsHeldByOther (string unitId, int exceptPlayer) {
     int p = 1;
     while (p <= 8) {
-        if (p != exceptPlayer && gv_mbUnit[p] == unitId) {
-            return true;
-        }
+        if (p != exceptPlayer && gv_mbUnit[p] == unitId) { return true; }
         p += 1;
     }
     return false;
 }
 
-string MB_DisplayName (string unitId) {
+bool MB_SDCandidateHas (string unitId) {
     int i = 0;
-    while (i < gv_mbTerranCount) {
-        if (gv_mbTerran[i] == unitId) { return gv_mbTerranDisplay[i]; }
+    while (i < MB_SD_CANDIDATES) {
+        if (gv_mbSDCandidate[i] == unitId) { return true; }
         i += 1;
     }
-    i = 0;
-    while (i < gv_mbZergCount) {
-        if (gv_mbZerg[i] == unitId) { return gv_mbZergDisplay[i]; }
-        i += 1;
-    }
-    i = 0;
-    while (i < gv_mbProtossCount) {
-        if (gv_mbProtoss[i] == unitId) { return gv_mbProtossDisplay[i]; }
-        i += 1;
-    }
-    return unitId;
+    return false;
 }
 
+//--------------------------------------------------------------------------------------------------
+// Blind Random draw
+//--------------------------------------------------------------------------------------------------
 string MB_DrawFromRace (int race, int player, string personalExclude) {
-    int count;
+    int count = MB_PoolCount(race);
     int start;
-    int step;
+    int step = 0;
     int idx;
     string candidate;
-
-    if (race == MB_RACE_TERRAN) { count = gv_mbTerranCount; }
-    else if (race == MB_RACE_ZERG) { count = gv_mbZergCount; }
-    else { count = gv_mbProtossCount; }
-
     if (count <= 0) { return ""; }
     start = RandomInt(0, count - 1);
-    step = 0;
     while (step < count) {
         idx = (start + step) % count;
-        if (race == MB_RACE_TERRAN) { candidate = gv_mbTerran[idx]; }
-        else if (race == MB_RACE_ZERG) { candidate = gv_mbZerg[idx]; }
-        else { candidate = gv_mbProtoss[idx]; }
-
-        if (candidate != personalExclude && !MB_IsHeldByOther(candidate, player)) {
-            return candidate;
-        }
+        candidate = MB_PoolUnit(race, idx);
+        if (candidate != personalExclude && !MB_IsHeldByOther(candidate, player)) { return candidate; }
         step += 1;
     }
     return "";
@@ -211,47 +280,112 @@ string MB_DrawRandomRace (int player, string personalExclude) {
     return "";
 }
 
+//--------------------------------------------------------------------------------------------------
+// UI helpers
+//--------------------------------------------------------------------------------------------------
+void MB_SetPanelLook (int control) {
+    DialogControlSetPropertyAsBool(control, c_triggerControlPropertyBackgroundVisible, PlayerGroupAll(), true);
+    DialogControlSetPropertyAsBool(control, c_triggerControlPropertyBorderVisible, PlayerGroupAll(), true);
+    DialogControlSetPropertyAsColor(control, c_triggerControlPropertyFillColor, PlayerGroupAll(), ColorWithAlpha(5.0, 9.0, 15.0, 92.0));
+    DialogControlSetPropertyAsColor(control, c_triggerControlPropertyBorderColor, PlayerGroupAll(), Color(25.0, 48.0, 70.0));
+}
+
+text MB_TeamTagText (int team, string s) {
+    if (team == 0) { return TextWithColor(StringToText(s), Color(35.0, 70.0, 100.0)); }
+    return TextWithColor(StringToText(s), Color(100.0, 45.0, 35.0));
+}
+
+void MB_ResetVoteButtonTextFor (int p) {
+    playergroup one = PlayerGroupSingle(p);
+    if (gv_mbVote[p] == MB_MODE_BLIND) {
+        DialogControlSetPropertyAsText(gv_mbVoteBlindButton, c_triggerControlPropertyText, one, StringToText("BLIND RANDOM\n[ 내 선택 ]"));
+        DialogControlSetPropertyAsText(gv_mbVoteSDButton, c_triggerControlPropertyText, one, StringToText("SINGLE DRAFT\n24개 후보 드래프트"));
+    }
+    else if (gv_mbVote[p] == MB_MODE_SD) {
+        DialogControlSetPropertyAsText(gv_mbVoteBlindButton, c_triggerControlPropertyText, one, StringToText("BLIND RANDOM\n종족 선택 + 즉시 추첨"));
+        DialogControlSetPropertyAsText(gv_mbVoteSDButton, c_triggerControlPropertyText, one, StringToText("SINGLE DRAFT\n[ 내 선택 ]"));
+    }
+    else {
+        DialogControlSetPropertyAsText(gv_mbVoteBlindButton, c_triggerControlPropertyText, one, StringToText("BLIND RANDOM\n종족 선택 + 즉시 추첨"));
+        DialogControlSetPropertyAsText(gv_mbVoteSDButton, c_triggerControlPropertyText, one, StringToText("SINGLE DRAFT\n24개 후보 드래프트"));
+    }
+}
+
+int MB_CountVotes (int mode) {
+    int p = 1;
+    int count = 0;
+    while (p <= 8) { if (MB_PlayerActive(p) && gv_mbVote[p] == mode) { count += 1; } p += 1; }
+    return count;
+}
+
+void MB_UpdateVoteUI () {
+    int blind = MB_CountVotes(MB_MODE_BLIND);
+    int sd = MB_CountVotes(MB_MODE_SD);
+    int remain = FixedToInt(TimerGetRemaining(gv_mbTimer));
+    string s = "BLIND  " + IntToString(blind) + "표     |     SINGLE DRAFT  " + IntToString(sd) + "표     |     " + IntToString(remain) + "초";
+    DialogControlSetPropertyAsText(gv_mbVoteInfo, c_triggerControlPropertyText, PlayerGroupAll(), StringToText(s));
+}
+
 void MB_UpdateTeamRevealFor (int viewer) {
     int p = 1;
-    text t = StringToText("아군 선택 현황\n");
+    int row = 0;
     playergroup allies;
-
+    string s;
+    playergroup one;
     if (!MB_PlayerActive(viewer)) { return; }
+    one = PlayerGroupSingle(viewer);
     allies = PlayerGroupAlliance(c_playerGroupAlly, viewer);
     PlayerGroupAdd(allies, viewer);
 
-    while (p <= 8) {
+    while (row < 4) {
+        DialogControlSetPropertyAsText(gv_mbTeamRow[row], c_triggerControlPropertyText, one, StringToText(""));
+        row += 1;
+    }
+    row = 0;
+    while (p <= 8 && row < 4) {
         if (MB_PlayerActive(p) && PlayerGroupHasPlayer(allies, p)) {
-            t = t + PlayerName(p) + StringToText(" : ");
-            if (gv_mbUnit[p] == "") {
-                t = t + StringToText("선택 중");
-            }
+            s = "P" + IntToString(p) + "  " + TextToString(PlayerName(p)) + "     ";
+            if (gv_mbUnit[p] == "") { s = s + "선택 중"; }
             else {
-                t = t + StringToText(MB_DisplayName(gv_mbUnit[p]));
-                if (gv_mbCanReroll[p] && !gv_mbRerollUsed[p]) {
-                    t = t + StringToText("  [리롤 가능]");
-                }
+                s = s + MB_DisplayName(gv_mbUnit[p]);
+                if (gv_mbCanReroll[p] && !gv_mbRerollUsed[p]) { s = s + "   · 리롤 가능"; }
             }
-            t = t + StringToText("\n");
+            DialogControlSetPropertyAsText(gv_mbTeamRow[row], c_triggerControlPropertyText, one, StringToText(s));
+            row += 1;
         }
         p += 1;
     }
-
-    DialogControlSetPropertyAsText(gv_mbTeamLabel, c_triggerControlPropertyText, PlayerGroupSingle(viewer), t);
 }
 
 void MB_UpdateAllTeamReveal () {
     int p = 1;
-    while (p <= 8) {
-        MB_UpdateTeamRevealFor(p);
-        p += 1;
-    }
+    while (p <= 8) { MB_UpdateTeamRevealFor(p); p += 1; }
 }
 
+void MB_SetBlindSelectionState (int p) {
+    playergroup one = PlayerGroupSingle(p);
+    DialogControlSetEnabled(gv_mbTerranButton, one, false);
+    DialogControlSetEnabled(gv_mbZergButton, one, false);
+    DialogControlSetEnabled(gv_mbProtossButton, one, false);
+    DialogControlSetEnabled(gv_mbRandomButton, one, false);
+    if (gv_mbRaceChoice[p] == MB_RACE_RANDOM && !gv_mbRerollUsed[p]) {
+        DialogControlSetVisible(gv_mbRerollButton, one, true);
+        DialogControlSetEnabled(gv_mbRerollButton, one, true);
+        DialogControlSetPropertyAsText(gv_mbRerollButton, c_triggerControlPropertyText, one, StringToText("REROLL · 즉시 재추첨"));
+    }
+    else {
+        DialogControlSetVisible(gv_mbRerollButton, one, false);
+    }
+    DialogControlSetPropertyAsText(gv_mbBlindStatus, c_triggerControlPropertyText, one,
+        StringToText("내 유닛  ·  " + MB_DisplayName(gv_mbUnit[p])));
+}
+
+//--------------------------------------------------------------------------------------------------
+// Blind Random actions
+//--------------------------------------------------------------------------------------------------
 void MB_AssignRace (int player, int raceChoice, bool grantReroll) {
     string result;
     if (!MB_PlayerActive(player) || gv_mbUnit[player] != "") { return; }
-
     gv_mbRaceChoice[player] = raceChoice;
     gv_mbCanReroll[player] = grantReroll;
     gv_mbRerollUsed[player] = false;
@@ -263,6 +397,7 @@ void MB_AssignRace (int player, int raceChoice, bool grantReroll) {
     else { result = MB_DrawRandomRace(player, ""); }
 
     gv_mbUnit[player] = result;
+    MB_SetBlindSelectionState(player);
     UIDisplayMessage(PlayerGroupAlliance(c_playerGroupAlly, player), c_messageAreaSubtitle,
         PlayerName(player) + StringToText(" → ") + StringToText(MB_DisplayName(result)));
     MB_UpdateAllTeamReveal();
@@ -271,11 +406,11 @@ void MB_AssignRace (int player, int raceChoice, bool grantReroll) {
 void MB_RerollPlayer (int player) {
     string oldUnit;
     string newUnit;
+    playergroup one;
     if (!MB_PlayerActive(player)) { return; }
     if (!gv_mbCanReroll[player] || gv_mbRerollUsed[player] || gv_mbUnit[player] == "") { return; }
 
-    // The old unit is NOT globally banned. It immediately returns to the common pool.
-    // Only this player is prevented from drawing that same unit again on this reroll.
+    // Old result returns to the public pool immediately. Only this player's reroll excludes it.
     oldUnit = gv_mbUnit[player];
     gv_mbPreviousUnit[player] = oldUnit;
     gv_mbUnit[player] = "";
@@ -283,115 +418,495 @@ void MB_RerollPlayer (int player) {
     gv_mbUnit[player] = newUnit;
     gv_mbRerollUsed[player] = true;
 
+    one = PlayerGroupSingle(player);
+    DialogControlSetVisible(gv_mbRerollButton, one, true);
+    DialogControlSetEnabled(gv_mbRerollButton, one, false);
+    DialogControlSetPropertyAsText(gv_mbRerollButton, c_triggerControlPropertyText, one, StringToText("REROLL USED"));
+    DialogControlSetPropertyAsText(gv_mbBlindStatus, c_triggerControlPropertyText, one,
+        StringToText("내 유닛  ·  " + MB_DisplayName(newUnit)));
+
     UIDisplayMessage(PlayerGroupAlliance(c_playerGroupAlly, player), c_messageAreaSubtitle,
-        PlayerName(player) + StringToText(" 리롤: ") + StringToText(MB_DisplayName(oldUnit)) +
-        StringToText(" → ") + StringToText(MB_DisplayName(newUnit)));
+        PlayerName(player) + StringToText(" 리롤: ") + StringToText(MB_DisplayName(oldUnit)) + StringToText(" → ") + StringToText(MB_DisplayName(newUnit)));
     MB_UpdateAllTeamReveal();
 }
 
-int MB_CountVotes (int mode) {
+//--------------------------------------------------------------------------------------------------
+// Single Draft board generation
+//--------------------------------------------------------------------------------------------------
+int MB_SDCountAir () {
+    int i = 0; int n = 0;
+    while (i < MB_SD_CANDIDATES) { if (MB_IsAir(gv_mbSDCandidate[i])) { n += 1; } i += 1; }
+    return n;
+}
+int MB_SDCountDirect () {
+    int i = 0; int n = 0;
+    while (i < MB_SD_CANDIDATES) { if (MB_UnitRole(gv_mbSDCandidate[i]) == MB_ROLE_DIRECT) { n += 1; } i += 1; }
+    return n;
+}
+int MB_SDCountCaster () {
+    int i = 0; int n = 0;
+    while (i < MB_SD_CANDIDATES) { if (MB_UnitRole(gv_mbSDCandidate[i]) == MB_ROLE_CASTER) { n += 1; } i += 1; }
+    return n;
+}
+int MB_SDCountHigh () {
+    int i = 0; int n = 0;
+    while (i < MB_SD_CANDIDATES) { if (MB_IsHighWorkload(gv_mbSDCandidate[i])) { n += 1; } i += 1; }
+    return n;
+}
+int MB_SDCountReliableAA () {
+    int i = 0; int n = 0;
+    while (i < MB_SD_CANDIDATES) { if (MB_AAScore2(gv_mbSDCandidate[i]) == 2) { n += 1; } i += 1; }
+    return n;
+}
+int MB_SDAAScore2 () {
+    int i = 0; int n = 0;
+    while (i < MB_SD_CANDIDATES) { n += MB_AAScore2(gv_mbSDCandidate[i]); i += 1; }
+    return n;
+}
+
+int MB_SDBoardPenalty () {
+    int air = MB_SDCountAir();
+    int direct = MB_SDCountDirect();
+    int caster = MB_SDCountCaster();
+    int high = MB_SDCountHigh();
+    int reliable = MB_SDCountReliableAA();
+    int aa = MB_SDAAScore2();
+    int p = 0;
+    if (air < 4) { p += (4 - air) * 12; }
+    if (air > 10) { p += (air - 10) * 12; }
+    if (direct < 15) { p += (15 - direct) * 8; }
+    if (caster > 4) { p += (caster - 4) * 8; }
+    if (high > 6) { p += (high - 6) * 5; }
+    if (reliable < 4) { p += (4 - reliable) * 10; }
+    if (aa < 10) { p += (10 - aa) * 5; }
+    return p;
+}
+
+string MB_RandomUnusedCandidateFromRace (int race) {
+    int count = MB_PoolCount(race);
+    int start = RandomInt(0, count - 1);
+    int step = 0;
+    string u;
+    while (step < count) {
+        u = MB_PoolUnit(race, (start + step) % count);
+        if (!MB_SDCandidateHas(u)) { return u; }
+        step += 1;
+    }
+    return "";
+}
+
+void MB_SDComputeQuotas (int[3] q) {
+    int total = gv_mbTerranCount + gv_mbZergCount + gv_mbProtossCount;
+    int used;
+    int remT;
+    int remZ;
+    int remP;
+    q[0] = (MB_SD_CANDIDATES * gv_mbTerranCount) / total;
+    q[1] = (MB_SD_CANDIDATES * gv_mbZergCount) / total;
+    q[2] = (MB_SD_CANDIDATES * gv_mbProtossCount) / total;
+    used = q[0] + q[1] + q[2];
+    remT = (MB_SD_CANDIDATES * gv_mbTerranCount) % total;
+    remZ = (MB_SD_CANDIDATES * gv_mbZergCount) % total;
+    remP = (MB_SD_CANDIDATES * gv_mbProtossCount) % total;
+    while (used < MB_SD_CANDIDATES) {
+        if (remT >= remZ && remT >= remP) { q[0] += 1; remT = -1; }
+        else if (remZ >= remT && remZ >= remP) { q[1] += 1; remZ = -1; }
+        else { q[2] += 1; remP = -1; }
+        used += 1;
+    }
+}
+
+void MB_SDGenerateInitialBoard () {
+    int[3] quota;
+    int slot = 0;
+    int race = 1;
+    int n;
+    int i = 0;
+    MB_SDComputeQuotas(quota);
+    while (i < MB_SD_CANDIDATES) { gv_mbSDCandidate[i] = ""; gv_mbSDTaken[i] = false; i += 1; }
+    while (race <= 3) {
+        n = 0;
+        while (n < quota[race - 1]) {
+            gv_mbSDCandidate[slot] = MB_RandomUnusedCandidateFromRace(race);
+            slot += 1;
+            n += 1;
+        }
+        race += 1;
+    }
+}
+
+void MB_SDRepairBoard () {
+    int attempts = 0;
+    int oldPenalty;
+    int newPenalty;
+    int slot;
+    int race;
+    string oldUnit;
+    string newUnit;
+
+    while (MB_SDBoardPenalty() > 0 && attempts < 700) {
+        oldPenalty = MB_SDBoardPenalty();
+        slot = RandomInt(0, MB_SD_CANDIDATES - 1);
+        race = MB_UnitRace(gv_mbSDCandidate[slot]);
+        oldUnit = gv_mbSDCandidate[slot];
+        gv_mbSDCandidate[slot] = "";
+        newUnit = MB_RandomUnusedCandidateFromRace(race);
+        if (newUnit == "") {
+            gv_mbSDCandidate[slot] = oldUnit;
+        }
+        else {
+            gv_mbSDCandidate[slot] = newUnit;
+            newPenalty = MB_SDBoardPenalty();
+            if (newPenalty > oldPenalty) { gv_mbSDCandidate[slot] = oldUnit; }
+        }
+        attempts += 1;
+    }
+
+    // Extremely unlikely fallback: regenerate once and repair again rather than accepting a broken board.
+    if (MB_SDBoardPenalty() > 0) {
+        MB_SDGenerateInitialBoard();
+        attempts = 0;
+        while (MB_SDBoardPenalty() > 0 && attempts < 700) {
+            oldPenalty = MB_SDBoardPenalty();
+            slot = RandomInt(0, MB_SD_CANDIDATES - 1);
+            race = MB_UnitRace(gv_mbSDCandidate[slot]);
+            oldUnit = gv_mbSDCandidate[slot];
+            gv_mbSDCandidate[slot] = "";
+            newUnit = MB_RandomUnusedCandidateFromRace(race);
+            if (newUnit == "") { gv_mbSDCandidate[slot] = oldUnit; }
+            else {
+                gv_mbSDCandidate[slot] = newUnit;
+                newPenalty = MB_SDBoardPenalty();
+                if (newPenalty > oldPenalty) { gv_mbSDCandidate[slot] = oldUnit; }
+            }
+            attempts += 1;
+        }
+    }
+}
+
+void MB_SDShuffleTeamArray (int team) {
+    int count;
+    int i;
+    int j;
+    int tmp;
+    if (team == 0) { count = gv_mbTeamACount; }
+    else { count = gv_mbTeamBCount; }
+    i = count - 1;
+    while (i > 0) {
+        j = RandomInt(0, i);
+        if (team == 0) { tmp = gv_mbTeamAPlayers[i]; gv_mbTeamAPlayers[i] = gv_mbTeamAPlayers[j]; gv_mbTeamAPlayers[j] = tmp; }
+        else { tmp = gv_mbTeamBPlayers[i]; gv_mbTeamBPlayers[i] = gv_mbTeamBPlayers[j]; gv_mbTeamBPlayers[j] = tmp; }
+        i -= 1;
+    }
+}
+
+void MB_SDBuildTeamsAndOrder () {
     int p = 1;
-    int count = 0;
+    int first = 0;
+    playergroup allies;
+    int a = 0;
+    int b = 0;
+    int i = 0;
+    int team;
+    int startTeam = RandomInt(0, 1);
+    int pattern;
+
+    gv_mbTeamACount = 0;
+    gv_mbTeamBCount = 0;
+    while (p <= 8) { if (first == 0 && MB_PlayerActive(p)) { first = p; } p += 1; }
+    if (first == 0) { gv_mbSDOrderCount = 0; return; }
+
+    allies = PlayerGroupAlliance(c_playerGroupAlly, first);
+    PlayerGroupAdd(allies, first);
+    p = 1;
     while (p <= 8) {
-        if (MB_PlayerActive(p) && gv_mbVote[p] == mode) { count += 1; }
+        if (MB_PlayerActive(p)) {
+            if (PlayerGroupHasPlayer(allies, p)) { gv_mbTeamAPlayers[gv_mbTeamACount] = p; gv_mbTeamACount += 1; }
+            else { gv_mbTeamBPlayers[gv_mbTeamBCount] = p; gv_mbTeamBCount += 1; }
+        }
         p += 1;
     }
-    return count;
+
+    MB_SDShuffleTeamArray(0);
+    MB_SDShuffleTeamArray(1);
+    gv_mbSDOrderCount = gv_mbTeamACount + gv_mbTeamBCount;
+    i = 0;
+    while (i < gv_mbSDOrderCount) {
+        pattern = i % 8;
+        if (pattern == 0 || pattern == 3 || pattern == 4 || pattern == 7) { team = startTeam; }
+        else { team = 1 - startTeam; }
+
+        if (team == 0 && a < gv_mbTeamACount) { gv_mbSDOrder[i] = gv_mbTeamAPlayers[a]; a += 1; }
+        else if (team == 1 && b < gv_mbTeamBCount) { gv_mbSDOrder[i] = gv_mbTeamBPlayers[b]; b += 1; }
+        else if (a < gv_mbTeamACount) { gv_mbSDOrder[i] = gv_mbTeamAPlayers[a]; a += 1; }
+        else { gv_mbSDOrder[i] = gv_mbTeamBPlayers[b]; b += 1; }
+        i += 1;
+    }
 }
 
-void MB_UpdateVoteUI () {
-    int blind = MB_CountVotes(MB_MODE_BLIND);
-    int sd = MB_CountVotes(MB_MODE_SD);
-    int remain = FixedToInt(TimerGetRemaining(gv_mbTimer));
-    string s = "Blind Random: " + IntToString(blind) + "   |   Single Draft: " + IntToString(sd) +
-               "   |   " + IntToString(remain) + "초";
-    DialogControlSetPropertyAsText(gv_mbVoteInfo, c_triggerControlPropertyText, PlayerGroupAll(), StringToText(s));
+int MB_SDPlayerTeam (int p) {
+    int i = 0;
+    while (i < gv_mbTeamACount) { if (gv_mbTeamAPlayers[i] == p) { return 0; } i += 1; }
+    return 1;
+}
+
+void MB_SDUpdateBoardButtons () {
+    int i = 0;
+    string s;
+    while (i < MB_SD_CANDIDATES) {
+        if (gv_mbSDTaken[i]) { s = "LOCKED\n" + MB_DisplayName(gv_mbSDCandidate[i]); }
+        else { s = MB_DisplayName(gv_mbSDCandidate[i]); }
+        DialogControlSetPropertyAsText(gv_mbSDButton[i], c_triggerControlPropertyText, PlayerGroupAll(), StringToText(s));
+        DialogControlSetEnabled(gv_mbSDButton[i], PlayerGroupAll(), false);
+        i += 1;
+    }
+    if (gv_mbSDPickIndex < gv_mbSDOrderCount) {
+        i = 0;
+        while (i < MB_SD_CANDIDATES) {
+            if (!gv_mbSDTaken[i]) { DialogControlSetEnabled(gv_mbSDButton[i], PlayerGroupSingle(gv_mbSDOrder[gv_mbSDPickIndex]), true); }
+            i += 1;
+        }
+    }
+}
+
+void MB_SDUpdateOrderText () {
+    int i = 0;
+    int p;
+    int team;
+    string line;
+    text t = StringToText("PICK ORDER\n\n");
+    while (i < gv_mbSDOrderCount) {
+        p = gv_mbSDOrder[i];
+        team = MB_SDPlayerTeam(p);
+        line = IntToString(i + 1) + ".  [";
+        if (team == 0) { line = line + "BLUE"; } else { line = line + "RED"; }
+        line = line + "] P" + IntToString(p) + "  ";
+        if (i < gv_mbSDPickIndex) { line = line + MB_DisplayName(gv_mbUnit[p]); }
+        else if (i == gv_mbSDPickIndex) { line = line + "< 선택 중 >"; }
+        else { line = line + "대기"; }
+        t = t + MB_TeamTagText(team, line) + StringToText("\n");
+        i += 1;
+    }
+    DialogControlSetPropertyAsText(gv_mbSDOrderLabel, c_triggerControlPropertyText, PlayerGroupAll(), t);
+}
+
+void MB_SDUpdateTurn () {
+    int p;
+    int remain;
+    if (gv_mbSDPickIndex >= gv_mbSDOrderCount) { return; }
+    p = gv_mbSDOrder[gv_mbSDPickIndex];
+    remain = FixedToInt(TimerGetRemaining(gv_mbTimer));
+    DialogControlSetPropertyAsText(gv_mbSDCurrentLabel, c_triggerControlPropertyText, PlayerGroupAll(),
+        MB_TeamTagText(MB_SDPlayerTeam(p), "NOW PICKING   ·   P" + IntToString(p) + "   " + TextToString(PlayerName(p))));
+    DialogControlSetPropertyAsText(gv_mbSDInfo, c_triggerControlPropertyText, PlayerGroupAll(),
+        StringToText("남은 시간  " + IntToString(remain) + "초     ·     선택된 유닛은 즉시 잠깁니다"));
+    MB_SDUpdateBoardButtons();
+    MB_SDUpdateOrderText();
 }
 
 //--------------------------------------------------------------------------------------------------
-// UI
+// Production restrictions
+//--------------------------------------------------------------------------------------------------
+void MB_SetAllMonoUnitsAllowed (int p, bool allowed) {
+    int race = 1;
+    int i;
+    while (race <= 3) {
+        i = 0;
+        while (i < MB_PoolCount(race)) { TechTreeUnitAllow(p, MB_PoolUnit(race, i), allowed); i += 1; }
+        race += 1;
+    }
+}
+
+void MB_AllowPrecursors (int p, string selected) {
+    if (selected == "Baneling") { TechTreeUnitAllow(p, "Zergling", true); }
+    else if (selected == "Ravager") { TechTreeUnitAllow(p, "Roach", true); }
+    else if (selected == "LurkerMP") { TechTreeUnitAllow(p, "Hydralisk", true); }
+    else if (selected == "BroodLord") { TechTreeUnitAllow(p, "Corruptor", true); }
+    else if (selected == "Hellbat") { TechTreeUnitAllow(p, "Hellion", true); }
+    else if (selected == "Archon") {
+        TechTreeUnitAllow(p, "HighTemplar", true);
+        TechTreeUnitAllow(p, "DarkTemplar", true);
+    }
+}
+
+void MB_ApplyProductionRestrictionsFor (int p) {
+    if (!MB_PlayerActive(p) || gv_mbUnit[p] == "") { return; }
+    MB_SetAllMonoUnitsAllowed(p, false);
+    TechTreeUnitAllow(p, gv_mbUnit[p], true);
+    MB_AllowPrecursors(p, gv_mbUnit[p]);
+    // Non-selectable support units (workers, Medivac transport, Observer, Warp Prism, Overseer, etc.)
+    // remain on normal melee tech rules in this first restriction pass.
+}
+
+void MB_ApplyProductionRestrictionsAll () {
+    int p = 1;
+    while (p <= 8) { MB_ApplyProductionRestrictionsFor(p); p += 1; }
+}
+
+//--------------------------------------------------------------------------------------------------
+// UI creation
 //--------------------------------------------------------------------------------------------------
 void MB_CreateVoteUI () {
-    gv_mbVoteDialog = DialogCreate(620, 210, c_anchorCenter, 0, -80, true);
-    gv_mbVoteTitle = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_mbVoteTitle, PlayerGroupAll(), 560, 42);
-    DialogControlSetPosition(gv_mbVoteTitle, PlayerGroupAll(), c_anchorTop, 0, 18);
-    DialogControlSetPropertyAsText(gv_mbVoteTitle, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("MONOBATTLE 게임 모드 투표"));
+    gv_mbVoteDialog = DialogCreate(840, 360, c_anchorCenter, 0, -30, true);
+    DialogSetTransparency(gv_mbVoteDialog, 5.0);
 
-    gv_mbVoteInfo = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_mbVoteInfo, PlayerGroupAll(), 560, 30);
-    DialogControlSetPosition(gv_mbVoteInfo, PlayerGroupAll(), c_anchorTop, 0, 64);
+    gv_mbVoteHeaderPanel = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypePanel);
+    DialogControlSetSize(gv_mbVoteHeaderPanel, PlayerGroupAll(), 790, 88);
+    DialogControlSetPosition(gv_mbVoteHeaderPanel, PlayerGroupAll(), c_anchorTop, 0, 18);
+    MB_SetPanelLook(gv_mbVoteHeaderPanel);
+
+    gv_mbVoteTitle = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbVoteTitle, PlayerGroupAll(), 740, 34);
+    DialogControlSetPosition(gv_mbVoteTitle, PlayerGroupAll(), c_anchorTop, 0, 30);
+    DialogControlSetPropertyAsText(gv_mbVoteTitle, c_triggerControlPropertyText, PlayerGroupAll(),
+        TextWithColor(StringToText("MONOBATTLE"), Color(45.0, 82.0, 100.0)));
+
+    gv_mbVoteSubtitle = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbVoteSubtitle, PlayerGroupAll(), 740, 28);
+    DialogControlSetPosition(gv_mbVoteSubtitle, PlayerGroupAll(), c_anchorTop, 0, 65);
+    DialogControlSetPropertyAsText(gv_mbVoteSubtitle, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("이번 게임의 선택 방식을 투표하세요"));
 
     gv_mbVoteBlindButton = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbVoteBlindButton, PlayerGroupAll(), 250, 60);
-    DialogControlSetPosition(gv_mbVoteBlindButton, PlayerGroupAll(), c_anchorBottomLeft, 45, -28);
-    DialogControlSetPropertyAsText(gv_mbVoteBlindButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("BLIND RANDOM"));
+    DialogControlSetSize(gv_mbVoteBlindButton, PlayerGroupAll(), 350, 126);
+    DialogControlSetPosition(gv_mbVoteBlindButton, PlayerGroupAll(), c_anchorTopLeft, 55, 125);
 
     gv_mbVoteSDButton = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbVoteSDButton, PlayerGroupAll(), 250, 60);
-    DialogControlSetPosition(gv_mbVoteSDButton, PlayerGroupAll(), c_anchorBottomRight, -45, -28);
-    DialogControlSetPropertyAsText(gv_mbVoteSDButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("SINGLE DRAFT"));
+    DialogControlSetSize(gv_mbVoteSDButton, PlayerGroupAll(), 350, 126);
+    DialogControlSetPosition(gv_mbVoteSDButton, PlayerGroupAll(), c_anchorTopLeft, 435, 125);
+
+    gv_mbVoteInfo = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbVoteInfo, PlayerGroupAll(), 740, 32);
+    DialogControlSetPosition(gv_mbVoteInfo, PlayerGroupAll(), c_anchorTop, 0, 270);
+
+    gv_mbVoteFooter = DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbVoteFooter, PlayerGroupAll(), 740, 26);
+    DialogControlSetPosition(gv_mbVoteFooter, PlayerGroupAll(), c_anchorTop, 0, 315);
+    DialogControlSetPropertyAsText(gv_mbVoteFooter, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("20초 동안 자유롭게 표를 바꿀 수 있습니다"));
 
     DialogSetVisible(gv_mbVoteDialog, PlayerGroupAll(), false);
 }
 
 void MB_CreateBlindUI () {
-    gv_mbBlindDialog = DialogCreate(720, 390, c_anchorCenter, 0, -20, false);
+    int i = 0;
+    gv_mbBlindDialog = DialogCreate(920, 540, c_anchorCenter, 0, -10, false);
+    DialogSetTransparency(gv_mbBlindDialog, 5.0);
+
+    gv_mbBlindHeaderPanel = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypePanel);
+    DialogControlSetSize(gv_mbBlindHeaderPanel, PlayerGroupAll(), 870, 88);
+    DialogControlSetPosition(gv_mbBlindHeaderPanel, PlayerGroupAll(), c_anchorTop, 0, 16);
+    MB_SetPanelLook(gv_mbBlindHeaderPanel);
+
     gv_mbBlindTitle = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_mbBlindTitle, PlayerGroupAll(), 660, 42);
-    DialogControlSetPosition(gv_mbBlindTitle, PlayerGroupAll(), c_anchorTop, 0, 16);
-    DialogControlSetPropertyAsText(gv_mbBlindTitle, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("BLIND RANDOM - 종족을 선택하면 즉시 유닛이 결정됩니다"));
+    DialogControlSetSize(gv_mbBlindTitle, PlayerGroupAll(), 820, 34);
+    DialogControlSetPosition(gv_mbBlindTitle, PlayerGroupAll(), c_anchorTop, 0, 28);
+    DialogControlSetPropertyAsText(gv_mbBlindTitle, c_triggerControlPropertyText, PlayerGroupAll(),
+        TextWithColor(StringToText("BLIND RANDOM"), Color(45.0, 82.0, 100.0)));
 
     gv_mbBlindInfo = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_mbBlindInfo, PlayerGroupAll(), 660, 28);
-    DialogControlSetPosition(gv_mbBlindInfo, PlayerGroupAll(), c_anchorTop, 0, 58);
+    DialogControlSetSize(gv_mbBlindInfo, PlayerGroupAll(), 820, 28);
+    DialogControlSetPosition(gv_mbBlindInfo, PlayerGroupAll(), c_anchorTop, 0, 65);
 
     gv_mbTerranButton = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbTerranButton, PlayerGroupAll(), 145, 55);
-    DialogControlSetPosition(gv_mbTerranButton, PlayerGroupAll(), c_anchorTopLeft, 42, 95);
-    DialogControlSetPropertyAsText(gv_mbTerranButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("TERRAN"));
+    DialogControlSetSize(gv_mbTerranButton, PlayerGroupAll(), 195, 68);
+    DialogControlSetPosition(gv_mbTerranButton, PlayerGroupAll(), c_anchorTopLeft, 38, 122);
+    DialogControlSetPropertyAsText(gv_mbTerranButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("TERRAN\n테란 풀에서 즉시 추첨"));
 
     gv_mbZergButton = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbZergButton, PlayerGroupAll(), 145, 55);
-    DialogControlSetPosition(gv_mbZergButton, PlayerGroupAll(), c_anchorTopLeft, 207, 95);
-    DialogControlSetPropertyAsText(gv_mbZergButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("ZERG"));
+    DialogControlSetSize(gv_mbZergButton, PlayerGroupAll(), 195, 68);
+    DialogControlSetPosition(gv_mbZergButton, PlayerGroupAll(), c_anchorTopLeft, 254, 122);
+    DialogControlSetPropertyAsText(gv_mbZergButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("ZERG\n저그 풀에서 즉시 추첨"));
 
     gv_mbProtossButton = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbProtossButton, PlayerGroupAll(), 145, 55);
-    DialogControlSetPosition(gv_mbProtossButton, PlayerGroupAll(), c_anchorTopLeft, 372, 95);
-    DialogControlSetPropertyAsText(gv_mbProtossButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("PROTOSS"));
+    DialogControlSetSize(gv_mbProtossButton, PlayerGroupAll(), 195, 68);
+    DialogControlSetPosition(gv_mbProtossButton, PlayerGroupAll(), c_anchorTopLeft, 470, 122);
+    DialogControlSetPropertyAsText(gv_mbProtossButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("PROTOSS\n프로토스 풀에서 즉시 추첨"));
 
     gv_mbRandomButton = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbRandomButton, PlayerGroupAll(), 145, 55);
-    DialogControlSetPosition(gv_mbRandomButton, PlayerGroupAll(), c_anchorTopLeft, 537, 95);
-    DialogControlSetPropertyAsText(gv_mbRandomButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("RANDOM + REROLL"));
+    DialogControlSetSize(gv_mbRandomButton, PlayerGroupAll(), 195, 68);
+    DialogControlSetPosition(gv_mbRandomButton, PlayerGroupAll(), c_anchorTopLeft, 686, 122);
+    DialogControlSetPropertyAsText(gv_mbRandomButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("RANDOM\n3종족 랜덤 + 리롤 1회"));
+
+    gv_mbBlindStatus = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbBlindStatus, PlayerGroupAll(), 820, 36);
+    DialogControlSetPosition(gv_mbBlindStatus, PlayerGroupAll(), c_anchorTop, 0, 207);
+    DialogControlSetPropertyAsText(gv_mbBlindStatus, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("종족을 고르는 즉시 유닛이 확정됩니다"));
+
+    i = 0;
+    while (i < 4) {
+        gv_mbTeamRow[i] = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeLabel);
+        DialogControlSetSize(gv_mbTeamRow[i], PlayerGroupAll(), 780, 42);
+        DialogControlSetPosition(gv_mbTeamRow[i], PlayerGroupAll(), c_anchorTopLeft, 70, 260 + (i * 46));
+        i += 1;
+    }
 
     gv_mbRerollButton = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeButton);
-    DialogControlSetSize(gv_mbRerollButton, PlayerGroupAll(), 250, 48);
-    DialogControlSetPosition(gv_mbRerollButton, PlayerGroupAll(), c_anchorBottom, 0, -24);
-    DialogControlSetPropertyAsText(gv_mbRerollButton, c_triggerControlPropertyText, PlayerGroupAll(), StringToText("REROLL NOW"));
-
-    gv_mbTeamLabel = DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeLabel);
-    DialogControlSetSize(gv_mbTeamLabel, PlayerGroupAll(), 620, 150);
-    DialogControlSetPosition(gv_mbTeamLabel, PlayerGroupAll(), c_anchorTop, 0, 170);
+    DialogControlSetSize(gv_mbRerollButton, PlayerGroupAll(), 300, 54);
+    DialogControlSetPosition(gv_mbRerollButton, PlayerGroupAll(), c_anchorBottom, 0, -28);
+    DialogControlSetVisible(gv_mbRerollButton, PlayerGroupAll(), false);
 
     DialogSetVisible(gv_mbBlindDialog, PlayerGroupAll(), false);
 }
 
+void MB_CreateSDUI () {
+    int i = 0;
+    int col;
+    int row;
+    gv_mbSDDialog = DialogCreate(1060, 650, c_anchorCenter, 0, -5, false);
+    DialogSetTransparency(gv_mbSDDialog, 5.0);
+
+    gv_mbSDHeaderPanel = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypePanel);
+    DialogControlSetSize(gv_mbSDHeaderPanel, PlayerGroupAll(), 1010, 78);
+    DialogControlSetPosition(gv_mbSDHeaderPanel, PlayerGroupAll(), c_anchorTop, 0, 14);
+    MB_SetPanelLook(gv_mbSDHeaderPanel);
+
+    gv_mbSDTitle = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbSDTitle, PlayerGroupAll(), 960, 32);
+    DialogControlSetPosition(gv_mbSDTitle, PlayerGroupAll(), c_anchorTop, 0, 25);
+    DialogControlSetPropertyAsText(gv_mbSDTitle, c_triggerControlPropertyText, PlayerGroupAll(),
+        TextWithColor(StringToText("SINGLE DRAFT"), Color(45.0, 82.0, 100.0)));
+
+    gv_mbSDInfo = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbSDInfo, PlayerGroupAll(), 960, 26);
+    DialogControlSetPosition(gv_mbSDInfo, PlayerGroupAll(), c_anchorTop, 0, 58);
+
+    i = 0;
+    while (i < MB_SD_CANDIDATES) {
+        col = i % 4;
+        row = i / 4;
+        gv_mbSDButton[i] = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeButton);
+        DialogControlSetSize(gv_mbSDButton[i], PlayerGroupAll(), 155, 54);
+        DialogControlSetPosition(gv_mbSDButton[i], PlayerGroupAll(), c_anchorTopLeft, 30 + (col * 167), 108 + (row * 62));
+        i += 1;
+    }
+
+    gv_mbSDOrderLabel = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbSDOrderLabel, PlayerGroupAll(), 320, 350);
+    DialogControlSetPosition(gv_mbSDOrderLabel, PlayerGroupAll(), c_anchorTopLeft, 720, 108);
+
+    gv_mbSDCurrentLabel = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbSDCurrentLabel, PlayerGroupAll(), 320, 54);
+    DialogControlSetPosition(gv_mbSDCurrentLabel, PlayerGroupAll(), c_anchorTopLeft, 720, 475);
+
+    gv_mbSDHintLabel = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeLabel);
+    DialogControlSetSize(gv_mbSDHintLabel, PlayerGroupAll(), 650, 86);
+    DialogControlSetPosition(gv_mbSDHintLabel, PlayerGroupAll(), c_anchorTopLeft, 30, 500);
+    DialogControlSetPropertyAsText(gv_mbSDHintLabel, c_triggerControlPropertyText, PlayerGroupAll(),
+        StringToText("후보 24개 · 전원 고유 유닛 · 공중 4~10 · 순수 캐스터 최대 4\n최소 직접 전투/대공 조건을 통과한 보드만 사용합니다"));
+
+    DialogSetVisible(gv_mbSDDialog, PlayerGroupAll(), false);
+}
+
 //--------------------------------------------------------------------------------------------------
-// Phases
+// Phase flow
 //--------------------------------------------------------------------------------------------------
 void MB_StartVote () {
     int p = 1;
     gv_mbPhase = MB_PHASE_MODE_VOTE;
     gv_mbMode = MB_MODE_NONE;
-    while (p <= 8) {
-        gv_mbVote[p] = MB_MODE_NONE;
-        p += 1;
-    }
-
+    while (p <= 8) { gv_mbVote[p] = MB_MODE_NONE; MB_ResetVoteButtonTextFor(p); p += 1; }
     UnitPauseAll(true);
     DialogSetVisible(gv_mbBlindDialog, PlayerGroupAll(), false);
+    DialogSetVisible(gv_mbSDDialog, PlayerGroupAll(), false);
     DialogSetVisible(gv_mbVoteDialog, PlayerGroupAll(), true);
     TimerStart(gv_mbTimer, MB_VOTE_SECONDS, false, c_timeReal);
     MB_UpdateVoteUI();
@@ -406,46 +921,88 @@ void MB_StartBlind () {
         gv_mbPreviousUnit[p] = "";
         gv_mbCanReroll[p] = false;
         gv_mbRerollUsed[p] = false;
+        DialogControlSetEnabled(gv_mbTerranButton, PlayerGroupSingle(p), true);
+        DialogControlSetEnabled(gv_mbZergButton, PlayerGroupSingle(p), true);
+        DialogControlSetEnabled(gv_mbProtossButton, PlayerGroupSingle(p), true);
+        DialogControlSetEnabled(gv_mbRandomButton, PlayerGroupSingle(p), true);
+        DialogControlSetVisible(gv_mbRerollButton, PlayerGroupSingle(p), false);
+        DialogControlSetPropertyAsText(gv_mbBlindStatus, c_triggerControlPropertyText, PlayerGroupSingle(p), StringToText("종족을 고르는 즉시 유닛이 확정됩니다"));
         p += 1;
     }
-
     DialogSetVisible(gv_mbVoteDialog, PlayerGroupAll(), false);
     DialogSetVisible(gv_mbBlindDialog, PlayerGroupAll(), true);
     TimerStart(gv_mbTimer, MB_BLIND_SECONDS, false, c_timeReal);
     MB_UpdateAllTeamReveal();
 }
 
+void MB_StartSD () {
+    int p = 1;
+    gv_mbPhase = MB_PHASE_SD;
+    while (p <= 8) { gv_mbUnit[p] = ""; gv_mbCanReroll[p] = false; gv_mbRerollUsed[p] = false; p += 1; }
+    MB_SDGenerateInitialBoard();
+    MB_SDRepairBoard();
+    MB_SDBuildTeamsAndOrder();
+    gv_mbSDPickIndex = 0;
+    DialogSetVisible(gv_mbVoteDialog, PlayerGroupAll(), false);
+    DialogSetVisible(gv_mbSDDialog, PlayerGroupAll(), true);
+    if (gv_mbSDOrderCount <= 0) { return; }
+    TimerStart(gv_mbTimer, MB_SD_PICK_SECONDS, false, c_timeReal);
+    MB_SDUpdateTurn();
+}
+
+void MB_FinishSelection () {
+    gv_mbPhase = MB_PHASE_RUNNING;
+    DialogSetVisible(gv_mbBlindDialog, PlayerGroupAll(), false);
+    DialogSetVisible(gv_mbSDDialog, PlayerGroupAll(), false);
+    MB_ApplyProductionRestrictionsAll();
+    UnitPauseAll(false);
+    UIDisplayMessage(PlayerGroupAll(), c_messageAreaSubtitle, StringToText("Monobattle 선택 완료 · 생산 제한 적용"));
+}
+
 void MB_FinishBlind () {
     int p = 1;
     while (p <= 8) {
-        if (MB_PlayerActive(p) && gv_mbUnit[p] == "") {
-            // AFK/no selection: auto Random at timeout. No practical reroll time remains.
-            MB_AssignRace(p, MB_RACE_RANDOM, true);
-        }
+        if (MB_PlayerActive(p) && gv_mbUnit[p] == "") { MB_AssignRace(p, MB_RACE_RANDOM, true); }
         p += 1;
     }
+    MB_FinishSelection();
+}
 
-    gv_mbPhase = MB_PHASE_RUNNING;
-    DialogSetVisible(gv_mbBlindDialog, PlayerGroupAll(), false);
-    UnitPauseAll(false);
-    UIDisplayMessage(PlayerGroupAll(), c_messageAreaSubtitle,
-        StringToText("Alpha 1 선택 단계 완료. 생산 제한은 다음 Alpha에서 적용됩니다."));
+void MB_SDPickSlot (int player, int slot) {
+    if (gv_mbPhase != MB_PHASE_SD || gv_mbSDPickIndex >= gv_mbSDOrderCount) { return; }
+    if (player != gv_mbSDOrder[gv_mbSDPickIndex]) { return; }
+    if (slot < 0 || slot >= MB_SD_CANDIDATES || gv_mbSDTaken[slot]) { return; }
+    gv_mbUnit[player] = gv_mbSDCandidate[slot];
+    gv_mbSDTaken[slot] = true;
+    gv_mbSDPickIndex += 1;
+    if (gv_mbSDPickIndex >= gv_mbSDOrderCount) { MB_FinishSelection(); return; }
+    TimerStart(gv_mbTimer, MB_SD_PICK_SECONDS, false, c_timeReal);
+    MB_SDUpdateTurn();
+}
+
+void MB_SDAutoPick () {
+    int p;
+    int start;
+    int step = 0;
+    int slot;
+    if (gv_mbSDPickIndex >= gv_mbSDOrderCount) { return; }
+    p = gv_mbSDOrder[gv_mbSDPickIndex];
+    start = RandomInt(0, MB_SD_CANDIDATES - 1);
+    while (step < MB_SD_CANDIDATES) {
+        slot = (start + step) % MB_SD_CANDIDATES;
+        if (!gv_mbSDTaken[slot]) { MB_SDPickSlot(p, slot); return; }
+        step += 1;
+    }
 }
 
 void MB_ResolveVote () {
     int blind = MB_CountVotes(MB_MODE_BLIND);
     int sd = MB_CountVotes(MB_MODE_SD);
-
     if (blind > sd) { gv_mbMode = MB_MODE_BLIND; }
     else if (sd > blind) { gv_mbMode = MB_MODE_SD; }
     else { gv_mbMode = RandomInt(MB_MODE_BLIND, MB_MODE_SD); }
-
-    if (gv_mbMode == MB_MODE_SD) {
-        // Alpha 1 tests the vote path, but Single Draft board logic lands in the next build.
-        UIDisplayMessage(PlayerGroupAll(), c_messageAreaSubtitle,
-            StringToText("Single Draft 투표 경로 확인 완료 - Alpha 1에서는 Blind Random 테스트로 전환합니다."));
-    }
-    MB_StartBlind();
+    if (gv_mbMode == MB_MODE_SD) { MB_StartSD(); }
+    else { MB_StartBlind(); }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -454,14 +1011,14 @@ void MB_ResolveVote () {
 bool gt_MBDialogClick_Func (bool testConds, bool runActions) {
     int control;
     int p;
+    int i;
     if (!runActions) { return true; }
-
     control = EventDialogControl();
     p = EventPlayer();
 
     if (gv_mbPhase == MB_PHASE_MODE_VOTE) {
-        if (control == gv_mbVoteBlindButton) { gv_mbVote[p] = MB_MODE_BLIND; MB_UpdateVoteUI(); }
-        else if (control == gv_mbVoteSDButton) { gv_mbVote[p] = MB_MODE_SD; MB_UpdateVoteUI(); }
+        if (control == gv_mbVoteBlindButton) { gv_mbVote[p] = MB_MODE_BLIND; MB_ResetVoteButtonTextFor(p); MB_UpdateVoteUI(); }
+        else if (control == gv_mbVoteSDButton) { gv_mbVote[p] = MB_MODE_SD; MB_ResetVoteButtonTextFor(p); MB_UpdateVoteUI(); }
         return true;
     }
 
@@ -471,6 +1028,15 @@ bool gt_MBDialogClick_Func (bool testConds, bool runActions) {
         else if (control == gv_mbProtossButton) { MB_AssignRace(p, MB_RACE_PROTOSS, false); }
         else if (control == gv_mbRandomButton) { MB_AssignRace(p, MB_RACE_RANDOM, true); }
         else if (control == gv_mbRerollButton) { MB_RerollPlayer(p); }
+        return true;
+    }
+
+    if (gv_mbPhase == MB_PHASE_SD) {
+        i = 0;
+        while (i < MB_SD_CANDIDATES) {
+            if (control == gv_mbSDButton[i]) { MB_SDPickSlot(p, i); return true; }
+            i += 1;
+        }
     }
     return true;
 }
@@ -479,21 +1045,20 @@ bool gt_MBPhaseTimeout_Func (bool testConds, bool runActions) {
     if (!runActions) { return true; }
     if (gv_mbPhase == MB_PHASE_MODE_VOTE) { MB_ResolveVote(); }
     else if (gv_mbPhase == MB_PHASE_BLIND) { MB_FinishBlind(); }
+    else if (gv_mbPhase == MB_PHASE_SD) { MB_SDAutoPick(); }
     return true;
 }
 
 bool gt_MBTick_Func (bool testConds, bool runActions) {
     int remain;
     if (!runActions) { return true; }
-
-    if (gv_mbPhase == MB_PHASE_MODE_VOTE) {
-        MB_UpdateVoteUI();
-    }
+    if (gv_mbPhase == MB_PHASE_MODE_VOTE) { MB_UpdateVoteUI(); }
     else if (gv_mbPhase == MB_PHASE_BLIND) {
         remain = FixedToInt(TimerGetRemaining(gv_mbTimer));
         DialogControlSetPropertyAsText(gv_mbBlindInfo, c_triggerControlPropertyText, PlayerGroupAll(),
-            StringToText("남은 시간: " + IntToString(remain) + "초   |   Random만 리롤 1회 가능"));
+            StringToText("남은 시간  " + IntToString(remain) + "초     ·     먼저 고를수록 팀의 리롤 판단 시간이 늘어납니다"));
     }
+    else if (gv_mbPhase == MB_PHASE_SD) { MB_SDUpdateTurn(); }
     return true;
 }
 
@@ -502,16 +1067,16 @@ bool gt_MBTick_Func (bool testConds, bool runActions) {
 //--------------------------------------------------------------------------------------------------
 bool gt_MeleeInitialization_Func (bool testConds, bool runActions) {
     if (!runActions) { return true; }
-
     MeleeInitResources();
     MeleeInitUnits();
     MeleeInitAI();
-    MeleeInitOptions();
+    // Stock MeleeInitOptions is intentionally omitted. Monobattle will own victory/defeat logic;
+    // this also prevents an instant victory when testing the map alone.
 
     MB_InitUnitPool();
-    gv_mbTimer = TimerCreate();
     MB_CreateVoteUI();
     MB_CreateBlindUI();
+    MB_CreateSDUI();
     MB_StartVote();
     return true;
 }
@@ -537,7 +1102,6 @@ void gt_MBTick_Init () {
 }
 
 void InitTriggers () {
-    // Timer must exist before registering its expiry event.
     gv_mbTimer = TimerCreate();
     gt_MeleeInitialization_Init();
     gt_MBDialogClick_Init();
