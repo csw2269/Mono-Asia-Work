@@ -42,19 +42,26 @@ if old_badge not in src:
     raise SystemExit('Alpha 5.1 player-name badge geometry missing')
 src = src.replace(old_badge, new_badge, 1)
 
-# Keep the unit name on a separate centered-width line with a few pixels left/right margin.
-# Alpha 4.6+ currently places it at y+81, directly touching Alpha 5.1's player-name badge.
-old_name_size = '        DialogControlSetSize(gv_mbSDNameLabel[i], PlayerGroupAll(), 96, 22);\n'
-new_name_size = '        DialogControlSetSize(gv_mbSDNameLabel[i], PlayerGroupAll(), 88, 18);\n'
-if old_name_size not in src:
-    raise SystemExit('SD unit-name size anchor missing')
-src = src.replace(old_name_size, new_name_size, 1)
+# Keep the unit name on a separate compact line. Earlier recovery branches used different
+# width/height values, so match the generated control by identity rather than a historical size.
+name_size_pattern = re.compile(
+    r'        DialogControlSetSize\(gv_mbSDNameLabel\[i\], PlayerGroupAll\(\), \d+, \d+\);\n'
+)
+src, n = name_size_pattern.subn(
+    '        DialogControlSetSize(gv_mbSDNameLabel[i], PlayerGroupAll(), 88, 18);\n',
+    src,
+    count=1,
+)
+if n != 1:
+    raise SystemExit(f'failed to resize SD unit-name label: {n}')
 
-old_name_pos = '        DialogControlSetPosition(gv_mbSDNameLabel[i], PlayerGroupAll(), c_anchorTopLeft, x, y + 81);\n'
-new_name_pos = '''        DialogControlSetPosition(gv_mbSDNameLabel[i], PlayerGroupAll(), c_anchorTopLeft, x + 4, y + 93);\n        DialogControlSetPropertyAsString(gv_mbSDNameLabel[i], c_triggerControlPropertyStyle, PlayerGroupAll(), "GameButtonChargeSmall");\n'''
-if old_name_pos not in src:
-    raise SystemExit('SD unit-name position anchor missing')
-src = src.replace(old_name_pos, new_name_pos, 1)
+name_pos_pattern = re.compile(
+    r'        DialogControlSetPosition\(gv_mbSDNameLabel\[i\], PlayerGroupAll\(\), c_anchorTopLeft, [^;]+\);\n'
+)
+name_pos_replacement = '''        DialogControlSetPosition(gv_mbSDNameLabel[i], PlayerGroupAll(), c_anchorTopLeft, x + 4, y + 93);\n        DialogControlSetPropertyAsString(gv_mbSDNameLabel[i], c_triggerControlPropertyStyle, PlayerGroupAll(), "GameButtonChargeSmall");\n'''
+src, n = name_pos_pattern.subn(name_pos_replacement, src, count=1)
+if n != 1:
+    raise SystemExit(f'failed to reposition SD unit-name label: {n}')
 
 # Player-name badge already uses GameButtonChargeSmall from the stable SD layout. Keep that small
 # native font and the existing team-colored PlayerName(picker) rendering from Alpha 5.1.
