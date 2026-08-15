@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
     }
 
     if (!SFileOpenArchive(argv[1], 0, 0, &archive)) {
-        fprintf(stderr, "SFileOpenArchive failed: %lu\n", (unsigned long)GetLastError());
+        fprintf(stderr, "SFileOpenArchive failed: %lu\n", (unsigned long)SErrGetLastError());
         return 3;
     }
 
@@ -21,19 +21,19 @@ int main(int argc, char **argv) {
             MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
             MPQ_COMPRESSION_ZLIB,
             MPQ_COMPRESSION_NEXT_SAME)) {
-        fprintf(stderr, "SFileAddFileEx failed for %s: %lu\n", argv[3], (unsigned long)GetLastError());
+        fprintf(stderr, "SFileAddFileEx failed for %s: %lu\n", argv[3], (unsigned long)SErrGetLastError());
         SFileCloseArchive(archive);
         return 4;
     }
 
     if (!SFileFlushArchive(archive)) {
-        fprintf(stderr, "SFileFlushArchive failed: %lu\n", (unsigned long)GetLastError());
+        fprintf(stderr, "SFileFlushArchive failed: %lu\n", (unsigned long)SErrGetLastError());
         SFileCloseArchive(archive);
         return 5;
     }
 
     if (!SFileCloseArchive(archive)) {
-        fprintf(stderr, "SFileCloseArchive failed: %lu\n", (unsigned long)GetLastError());
+        fprintf(stderr, "SFileCloseArchive failed: %lu\n", (unsigned long)SErrGetLastError());
         return 6;
     }
 
