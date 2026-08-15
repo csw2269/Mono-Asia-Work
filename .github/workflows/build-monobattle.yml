@@ -1,6 +1,9 @@
 name: Build Monobattle Smoke Map
 
 on:
+  push:
+    paths:
+      - '.github/workflows/build-monobattle.yml'
   workflow_dispatch:
 
 jobs:
