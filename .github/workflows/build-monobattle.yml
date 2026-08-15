@@ -26,7 +26,6 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/_storm" \
             -DBUILD_SHARED_LIBS=ON \
             -DSTORM_USE_BUNDLED_LIBRARIES=ON \
-            -DWITH_BUNDLED_LIBTOMCRYPT=ON \
             -DSTORM_BUILD_TESTS=OFF
           cmake --build _StormLib/build --config Release -j2
           cmake --install _StormLib/build
@@ -38,7 +37,7 @@ jobs:
             -I"$PWD/_storm/include" \
             -L"$PWD/_storm/lib" \
             -Wl,-rpath,"$PWD/_storm/lib" \
-            -lstorm -lz -lbz2 \
+            -lstorm -lz \
             -o tools/mpq_replace
 
       - name: Build smoke map
