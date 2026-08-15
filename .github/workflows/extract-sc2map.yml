@@ -1,0 +1,58 @@
+name: Extract SC2Map
+
+on:
+  push:
+    paths:
+      - 'Tropic Shores 0.136.SC2Map'
+      - '.github/workflows/extract-sc2map.yml'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MPQ reader
+        run: python -m pip install --disable-pip-version-check mpyq
+
+      - name: Extract SC2Map
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          from mpyq import MPQArchive
+
+          source = Path('Tropic Shores 0.136.SC2Map')
+          out = Path('extracted_sc2map')
+          out.mkdir(exist_ok=True)
+
+          archive = MPQArchive(str(source))
+          files = archive.extract()
+          manifest = []
+
+          for name, data in files.items():
+              safe_name = name.replace('\\', '/')
+              target = out / safe_name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data or b'')
+              manifest.append(f'{safe_name}\t{len(data or b"")}')
+
+          (out / '_MANIFEST.tsv').write_text('\n'.join(sorted(manifest)) + '\n', encoding='utf-8')
+          print(f'Extracted {len(files)} files')
+
+      - name: Upload extracted map
+        uses: actions/upload-artifact@v4
+        with:
+          name: tropic-shores-extracted
+          path: extracted_sc2map
+          if-no-files-found: error
+          retention-days: 7
