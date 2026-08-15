@@ -1,0 +1,99 @@
+name: Build Monobattle Alpha 4.9
+
+on:
+  push:
+    branches: ['dev/monobattle-v0.1']
+    paths:
+      - 'tools/prepare_alpha49.py'
+      - '.github/workflows/build-monobattle-alpha49.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Alpha 4.9 source
+        run: python tools/prepare_alpha49.py
+
+      - name: Verify Alpha 4.9 UI source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('build/MapScript.galaxy').read_text(encoding='utf-8')
+          for marker in (
+              'void MB_ApplyTestBoostAll ()',
+              'void MB_TestBoostPulseAll ()',
+              'int[24] gv_mbSDOwnerRibbon',
+              'gv_mbSDOwnerRibbon[i] = DialogControlCreate',
+              '━━━━  P',
+              'Color(100.0, 100.0, 100.0)',
+          ):
+              assert marker in s, marker
+          for forbidden in ('MB_ApplyUpgradeRestrictionsAll','MB_DisableStandardResearch','MB_EnablePickResearch'):
+              assert forbidden not in s, forbidden
+          print('Alpha 4.9 UI source verified')
+          PY
+
+      - name: Verify TEST morph data
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t = Path('overlay/Base.SC2Data/GameData/AbilData.xml').read_text(encoding='utf-8')
+          assert 'UpgradeToLair' in t and 'UpgradeToHive' in t
+          assert t.count('value="12"') >= 6
+          print('Lair/Hive TEST morph data verified')
+          PY
+
+      - name: Build StormLib
+        run: |
+          git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
+          cmake -S _StormLib -B _StormLib/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/_storm" -DBUILD_SHARED_LIBS=ON -DSTORM_USE_BUNDLED_LIBRARIES=ON -DSTORM_BUILD_TESTS=OFF
+          cmake --build _StormLib/build --config Release -j2
+          cmake --install _StormLib/build
+
+      - name: Compile MPQ helper
+        run: |
+          cc tools/mpq_replace.c -I"$PWD/_storm/include" -L"$PWD/_storm/lib" -Wl,-rpath,"$PWD/_storm/lib" -lstorm -lz -o tools/mpq_replace
+
+      - name: Build map
+        run: |
+          mkdir -p dist
+          OUT='dist/Monobattle - 열대 해안 - Alpha4.9 TEST.SC2Map'
+          cp 'Tropic Shores 0.136.SC2Map' "$OUT"
+          tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'build/MapScript.galaxy' 'MapScript.galaxy'
+          tools/mpq_replace "$OUT" 'overlay/Base.SC2Data/GameData/AbilData.xml' 'Base.SC2Data\GameData\AbilData.xml'
+
+      - name: Verify packaged MPQ
+        run: |
+          python -m pip install --disable-pip-version-check mpyq
+          python - <<'PY'
+          from mpyq import MPQArchive
+          p='dist/Monobattle - 열대 해안 - Alpha4.9 TEST.SC2Map'
+          raw=MPQArchive(p).extract()
+          files={(k.decode('utf-8','replace') if isinstance(k,bytes) else str(k)).replace('\\','/'):bytes(v) for k,v in raw.items()}
+          s=files['MapScript.galaxy'].decode('utf-8-sig')
+          for marker in (
+              'void MB_ApplyTestBoostAll ()',
+              'void MB_TestBoostPulseAll ()',
+              'int[24] gv_mbSDOwnerRibbon',
+              'DialogControlSetVisible(gv_mbSDOwnerRibbon[i], PlayerGroupAll(), true)',
+              'Color(100.0, 100.0, 100.0)',
+          ):
+              assert marker in s, marker
+          assert 'MB_ApplyUpgradeRestrictionsAll' not in s
+          assert 'Base.SC2Data/GameData/AbilData.xml' in files
+          print('Alpha 4.9 packaged MPQ verified')
+          PY
+
+      - name: Upload map
+        uses: actions/upload-artifact@v4
+        with:
+          name: monobattle-tropic-shores-alpha49-test
+          path: 'dist/Monobattle - 열대 해안 - Alpha4.9 TEST.SC2Map'
+          retention-days: 7
