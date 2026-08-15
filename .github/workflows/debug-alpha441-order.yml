@@ -1,0 +1,36 @@
+name: Debug Alpha 4.4.1 Order
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['dev/monobattle-v0.1']
+    paths: ['.github/workflows/debug-alpha441-order.yml']
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare
+        run: python tools/prepare_alpha441.py
+      - name: Inspect ordering and context
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('build/MapScript.galaxy').read_text(encoding='utf-8')
+          def pos(x): return s.find(x)
+          markers = [
+              'void MB_TestBoostPulseFor (int p)',
+              'void MB_TestBoostPulseAll ()',
+              'void MB_ApplyTestBoostAll ()',
+              'void MB_FinishSelection ()',
+              'MB_ApplyTestBoostAll();',
+              'void MB_StartVote ()',
+          ]
+          for m in markers:
+              print(m, pos(m))
+          for target in ('void MB_ApplyTestBoostAll ()', 'void MB_FinishSelection ()'):
+              p = pos(target)
+              print('\n===== CONTEXT', target, '=====')
+              print(s[max(0,p-1200):p+1800])
+          PY
