@@ -1,0 +1,26 @@
+name: Debug Alpha 3.1 MapScript
+
+on:
+  push:
+    branches:
+      - 'dev/monobattle-v0.1'
+    paths:
+      - '.github/workflows/debug-alpha31-script.yml'
+  workflow_dispatch:
+
+jobs:
+  debug-script:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Prepare packaged MapScript
+        run: python tools/prepare_alpha31.py
+      - name: Upload final MapScript
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha31-final-mapscript
+          path: build/MapScript.galaxy
+          retention-days: 2
