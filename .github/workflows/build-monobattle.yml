@@ -29,7 +29,6 @@ jobs:
             -DSTORM_BUILD_TESTS=OFF
           cmake --build _StormLib/build --config Release -j2
           cmake --install _StormLib/build
-          find _storm -maxdepth 3 -type f | sort
 
       - name: Compile MPQ replacement helper
         run: |
@@ -48,12 +47,12 @@ jobs:
           tools/mpq_replace \
             'dist/Monobattle - 열대 해안 - smoke.SC2Map' \
             'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' \
-            'koKR.SC2Data\\LocalizedData\\GameStrings.txt'
+            'koKR.SC2Data\LocalizedData\GameStrings.txt'
 
           tools/mpq_replace \
             'dist/Monobattle - 열대 해안 - smoke.SC2Map' \
             'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' \
-            'enUS.SC2Data\\LocalizedData\\GameStrings.txt'
+            'enUS.SC2Data\LocalizedData\GameStrings.txt'
 
           sha256sum 'Tropic Shores 0.136.SC2Map' 'dist/Monobattle - 열대 해안 - smoke.SC2Map'
 
@@ -65,25 +64,35 @@ jobs:
           from pathlib import Path
 
           p = Path('dist/Monobattle - 열대 해안 - smoke.SC2Map')
-          a = MPQArchive(str(p))
-          files = a.extract()
+          files = MPQArchive(str(p)).extract()
 
-          def get(name):
-              for k, v in files.items():
-                  key = k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)
-                  if key.replace('\\', '/') == name:
-                      return bytes(v).decode('utf-8-sig')
-              raise SystemExit(f'missing {name}')
+          normalized = {}
+          for k, v in files.items():
+              key = k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)
+              key = key.replace('\\', '/')
+              normalized[key] = bytes(v)
 
-          ko = get('koKR.SC2Data/LocalizedData/GameStrings.txt')
-          en = get('enUS.SC2Data/LocalizedData/GameStrings.txt')
-          assert 'DocInfo/Name=Monobattle - 열대 해안' in ko
-          assert 'DocInfo/Name=Monobattle - Tropic Shores' in en
-          assert 'MapScript.galaxy' in [
-              (k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)).replace('\\', '/')
-              for k in files
-          ]
-          print(f'Verified {len(files)} MPQ entries')
+          print('MPQ entries:', len(normalized))
+          for key in sorted(normalized):
+              if 'GameStrings' in key or key == 'MapScript.galaxy':
+                  print('  ', repr(key), len(normalized[key]))
+
+          def text(name):
+              if name not in normalized:
+                  raise SystemExit(f'missing {name}')
+              return normalized[name].decode('utf-8-sig')
+
+          ko = text('koKR.SC2Data/LocalizedData/GameStrings.txt')
+          en = text('enUS.SC2Data/LocalizedData/GameStrings.txt')
+
+          if 'DocInfo/Name=Monobattle - 열대 해안' not in ko:
+              raise SystemExit('koKR map name replacement not found')
+          if 'DocInfo/Name=Monobattle - Tropic Shores' not in en:
+              raise SystemExit('enUS map name replacement not found')
+          if 'MapScript.galaxy' not in normalized:
+              raise SystemExit('MapScript.galaxy missing after rebuild')
+
+          print('Verified locale replacements and MapScript preservation')
           PY
 
       - name: Upload smoke map
