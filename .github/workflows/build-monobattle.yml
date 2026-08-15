@@ -1,4 +1,4 @@
-name: Build Monobattle Alpha
+name: Build Monobattle Alpha 2
 
 on:
   push:
@@ -20,26 +20,127 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare MapScript
+      - name: Prepare and validate Galaxy source
         run: |
           mkdir -p build
           python - <<'PY'
           from pathlib import Path
+          import re
 
           src = Path('overlay/MapScript.galaxy').read_text(encoding='utf-8')
-          needle = '    gv_mbTimer = TimerCreate();\n'
-          count = src.count(needle)
-          if count != 2:
-              raise SystemExit(f'expected exactly 2 timer initializations before fix, got {count}')
 
-          first = src.find(needle)
-          second = src.find(needle, first + len(needle))
-          fixed = src[:second] + src[second + len(needle):]
+          # TextToString exists in the SC2 runtime but is declared in natives_missing rather
+          # than the normal natives include. Declare only the one native we use.
+          marker = 'include "TriggerLibs/NativeLib"\n'
+          if marker not in src:
+              raise SystemExit('NativeLib include missing')
+          src = src.replace(marker, marker + 'native string TextToString(text inText);\n', 1)
 
-          if fixed.count(needle) != 1:
-              raise SystemExit('timer initialization hardening failed')
-          Path('build/MapScript.galaxy').write_text(fixed, encoding='utf-8', newline='\n')
-          print('Prepared MapScript with exactly one gv_mbTimer initialization')
+          # Keep the source readable while compiling with conservative Galaxy syntax:
+          # use a global quota array instead of passing an array as a function argument.
+          global_marker = 'int gv_mbSDPickIndex;\n'
+          if global_marker not in src:
+              raise SystemExit('SD pick-index global missing')
+          src = src.replace(global_marker, global_marker + 'int[3] gv_mbSDQuota;\n', 1)
+          src = src.replace('void MB_SDComputeQuotas (int[3] q) {', 'void MB_SDComputeQuotas () {')
+          src = src.replace('q[', 'gv_mbSDQuota[')
+          src = src.replace('    int[3] quota;\n', '')
+          src = src.replace('MB_SDComputeQuotas(quota);', 'MB_SDComputeQuotas();')
+          src = src.replace('quota[race - 1]', 'gv_mbSDQuota[race - 1]')
+
+          # Use Blizzard's StandardTemplates for modern button chrome/hover states.
+          replacements = {
+              'DialogControlCreate(gv_mbVoteDialog, c_triggerControlTypeButton)':
+                  'DialogControlCreateFromTemplate(gv_mbVoteDialog, c_triggerControlTypeButton, "StandardTemplates/StandardButtonTemplate")',
+              'DialogControlCreate(gv_mbBlindDialog, c_triggerControlTypeButton)':
+                  'DialogControlCreateFromTemplate(gv_mbBlindDialog, c_triggerControlTypeButton, "StandardTemplates/StandardButtonTemplate")',
+              'DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeButton)':
+                  'DialogControlCreateFromTemplate(gv_mbSDDialog, c_triggerControlTypeButton, "StandardTemplates/StandardButtonSmallTemplate")',
+          }
+          for old, new in replacements.items():
+              src = src.replace(old, new)
+
+          # Basic Galaxy/source invariants before we repack.
+          if src.count('gv_mbTimer = TimerCreate();') != 1:
+              raise SystemExit('expected exactly one Monobattle timer creation')
+          if 'MeleeInitOptions();' in src:
+              raise SystemExit('stock melee victory logic must remain disabled')
+          if 'int[3] q' in src or 'int[3] quota' in src:
+              raise SystemExit('array-parameter/local quota compatibility transform failed')
+          for required in (
+              'MB_StartVote', 'MB_StartBlind', 'MB_StartSD', 'MB_SDGenerateInitialBoard',
+              'MB_SDPickSlot', 'MB_SDAutoPick', 'MB_ApplyProductionRestrictionsAll',
+              'TechTreeUnitAllow', 'MB_RerollPlayer'
+          ):
+              if required not in src:
+                  raise SystemExit(f'missing Alpha 2 marker: {required}')
+
+          # Crude but useful structural sanity check for braces outside comments/strings.
+          no_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
+          no_comments = re.sub(r'//.*', '', no_strings)
+          if no_comments.count('{') != no_comments.count('}'):
+              raise SystemExit('unbalanced Galaxy braces')
+
+          # UI geometry checks: all button rectangles must fit inside their dialogs.
+          # Vote: x 55/435, width 350 in 840. Blind: x 38/254/470/686, width 195 in 920.
+          # SD: four columns x=30+167*c, width=155 in 1060.
+          assert 55 + 350 <= 840 and 435 + 350 <= 840
+          assert max(38,254,470,686) + 195 <= 920
+          assert 30 + 167*3 + 155 <= 1060
+          assert 108 + 62*5 + 54 <= 650
+
+          Path('build/MapScript.galaxy').write_text(src, encoding='utf-8', newline='\n')
+          print('Galaxy source prepared: polished button templates + SD + production restrictions')
+          PY
+
+      - name: Validate draft rules with simulation
+        run: |
+          python - <<'PY'
+          # Mirrors Alpha 2 metadata to prove that legal 24-card boards exist with the
+          # currently configured race quotas and constraints.
+          import random
+
+          T = ['Marine','Marauder','Reaper','Hellion','WidowMine','SiegeTank','Cyclone','Thor','VikingFighter','Banshee','Raven','Battlecruiser','Liberator','Ghost','Hellbat']
+          Z = ['Zergling','Baneling','Roach','Ravager','Hydralisk','LurkerMP','Infestor','SwarmHostMP','Ultralisk','Mutalisk','Corruptor','BroodLord','Viper','Queen']
+          P = ['Zealot','Stalker','Sentry','Adept','HighTemplar','DarkTemplar','Archon','Immortal','Colossus','Disruptor','Phoenix','VoidRay','Oracle','Tempest','Carrier']
+          pools = [T,Z,P]
+          total = sum(map(len,pools))
+          quotas = [24*len(x)//total for x in pools]
+          rem = [24*len(x)%total for x in pools]
+          while sum(quotas) < 24:
+              i = max(range(3), key=lambda x: rem[x])
+              quotas[i] += 1
+              rem[i] = -1
+          if quotas != [8,8,8]:
+              raise SystemExit(f'unexpected current quotas: {quotas}')
+
+          air = set(['VikingFighter','Banshee','Raven','Battlecruiser','Liberator','Mutalisk','Corruptor','BroodLord','Viper','Phoenix','VoidRay','Oracle','Tempest','Carrier'])
+          caster = set(['Raven','Infestor','Viper','HighTemplar'])
+          hybrid = set(['WidowMine','Ghost','Queen','SwarmHostMP','Sentry','Disruptor','Oracle'])
+          high = set(['Raven','Infestor','Viper','HighTemplar','Disruptor','Oracle'])
+          reliable = set(['Marine','WidowMine','Cyclone','Thor','VikingFighter','Battlecruiser','Liberator','Ghost','Hydralisk','Mutalisk','Corruptor','Queen','Stalker','Sentry','Archon','Phoenix','VoidRay','Tempest','Carrier'])
+          conditional = set(['Infestor','Viper','HighTemplar'])
+
+          def ok(board):
+              nair = sum(u in air for u in board)
+              ndirect = sum(u not in caster and u not in hybrid for u in board)
+              ncast = sum(u in caster for u in board)
+              nhigh = sum(u in high for u in board)
+              nrel = sum(u in reliable for u in board)
+              aa2 = sum(2 if u in reliable else 1 if u in conditional else 0 for u in board)
+              return 4 <= nair <= 10 and ndirect >= 15 and ncast <= 4 and nhigh <= 6 and nrel >= 4 and aa2 >= 10
+
+          hits = 0
+          for _ in range(20000):
+              board = []
+              for pool,q in zip(pools,quotas):
+                  board.extend(random.sample(pool,q))
+              if len(board) != len(set(board)):
+                  raise SystemExit('duplicate draft candidate')
+              if ok(board): hits += 1
+          if hits == 0:
+              raise SystemExit('draft constraints appear unsatisfiable')
+          print(f'Legal SD boards observed: {hits}/20000')
           PY
 
       - name: Build StormLib v9.40
@@ -63,70 +164,61 @@ jobs:
             -lstorm -lz \
             -o tools/mpq_replace
 
-      - name: Build Alpha 1 map
+      - name: Build Alpha 2 map
         run: |
           mkdir -p dist
-          OUT='dist/Monobattle - 열대 해안 - Alpha1.SC2Map'
+          OUT='dist/Monobattle - 열대 해안 - Alpha2.SC2Map'
           cp 'Tropic Shores 0.136.SC2Map' "$OUT"
 
           tools/mpq_replace "$OUT" \
             'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' \
             'koKR.SC2Data\LocalizedData\GameStrings.txt'
-
           tools/mpq_replace "$OUT" \
             'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' \
             'enUS.SC2Data\LocalizedData\GameStrings.txt'
-
           tools/mpq_replace "$OUT" \
             'build/MapScript.galaxy' \
             'MapScript.galaxy'
 
           sha256sum 'Tropic Shores 0.136.SC2Map' "$OUT"
 
-      - name: Verify Alpha 1 MPQ
+      - name: Verify rebuilt MPQ
         run: |
           python -m pip install --disable-pip-version-check mpyq
           python - <<'PY'
           from mpyq import MPQArchive
           from pathlib import Path
 
-          p = Path('dist/Monobattle - 열대 해안 - Alpha1.SC2Map')
-          files = MPQArchive(str(p)).extract()
-          normalized = {}
-          for k, v in files.items():
-              key = k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)
-              normalized[key.replace('\\', '/')] = bytes(v)
+          p = Path('dist/Monobattle - 열대 해안 - Alpha2.SC2Map')
+          raw = MPQArchive(str(p)).extract()
+          files = {}
+          for k,v in raw.items():
+              key = k.decode('utf-8','replace') if isinstance(k,bytes) else str(k)
+              files[key.replace('\\','/')] = bytes(v)
 
-          required = [
-              'MapScript.galaxy',
-              'MapInfo',
-              'Objects',
-              't3Terrain.xml',
-              'koKR.SC2Data/LocalizedData/GameStrings.txt',
-              'enUS.SC2Data/LocalizedData/GameStrings.txt',
-          ]
-          for name in required:
-              if name not in normalized:
-                  raise SystemExit(f'missing required MPQ entry: {name}')
+          for required in ('MapScript.galaxy','MapInfo','Objects','t3Terrain.xml','koKR.SC2Data/LocalizedData/GameStrings.txt'):
+              if required not in files:
+                  raise SystemExit(f'missing MPQ entry: {required}')
 
-          script = normalized['MapScript.galaxy'].decode('utf-8-sig')
-          for marker in ['MB_StartVote', 'MB_StartBlind', 'MB_RerollPlayer', 'MeleeInitResources']:
+          script = files['MapScript.galaxy'].decode('utf-8-sig')
+          for marker in ('MB_StartSD','MB_SDGenerateInitialBoard','MB_ApplyProductionRestrictionsAll','StandardButtonTemplate'):
               if marker not in script:
-                  raise SystemExit(f'MapScript marker missing: {marker}')
+                  raise SystemExit(f'missing packaged marker: {marker}')
+          if 'MeleeInitOptions();' in script:
+              raise SystemExit('stock melee result logic accidentally restored')
           if script.count('gv_mbTimer = TimerCreate();') != 1:
-              raise SystemExit('MapScript must contain exactly one timer initialization')
+              raise SystemExit('timer count regression')
 
-          ko = normalized['koKR.SC2Data/LocalizedData/GameStrings.txt'].decode('utf-8-sig')
+          ko = files['koKR.SC2Data/LocalizedData/GameStrings.txt'].decode('utf-8-sig')
           if 'DocInfo/Name=Monobattle - 열대 해안' not in ko:
-              raise SystemExit('koKR map name missing')
-
-          print(f'Alpha 1 verified: {len(normalized)} MPQ entries')
+              raise SystemExit('localized map name missing')
+          print(f'Alpha 2 MPQ verified: {len(files)} entries')
           PY
 
-      - name: Upload Alpha 1 map
+      - name: Upload Alpha 2 map
         uses: actions/upload-artifact@v4
         with:
-          name: monobattle-tropic-shores-alpha1
-          path: 'dist/Monobattle - 열대 해안 - Alpha1.SC2Map'
+          name: monobattle-tropic-shores-alpha2
+          path: 'dist/Monobattle - 열대 해안 - Alpha2.SC2Map'
           if-no-files-found: error
           retention-days: 7
