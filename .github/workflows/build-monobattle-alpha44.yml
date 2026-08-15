@@ -1,0 +1,119 @@
+name: Build Monobattle Alpha 4.4
+
+on:
+  push:
+    branches:
+      - 'dev/monobattle-v0.1'
+    paths:
+      - 'tools/prepare_alpha44.py'
+      - 'tools/prepare_alpha42.py'
+      - 'overlay/Base.SC2Data/GameData/AbilData.xml'
+      - '.github/workflows/build-monobattle-alpha44.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Alpha 4.4 Galaxy source
+        run: python tools/prepare_alpha44.py
+
+      - name: Verify Alpha 4.4 source markers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('build/MapScript.galaxy').read_text(encoding='utf-8')
+          for marker in (
+              'TextWithColor(StringToText("GAME MODE")',
+              'TextWithColor(StringToText("SELECT RACE")',
+              'int[24] gv_mbSDFrame',
+              'gv_mbSDFrame[i] = DialogControlCreate',
+              'DialogControlSetPropertyAsString(gv_mbSDIcon[i], c_triggerControlPropertyImage',
+              'PlayerGetColorIndex(targetPlayer, false)',
+              'void MB_ApplyUpgradeRestrictionsAll ()',
+              'MB_ApplyUpgradeRestrictionsAll();',
+              'MB_DisableStandardResearch',
+              'MB_EnablePickResearch'
+          ):
+              assert marker in s, marker
+          assert 'CatalogFieldValueCount(c_gameCatalogUpgrade' not in s
+          assert 'MB_UpgradeAffectsRelatedUnit' not in s
+          print('Alpha 4.4 source verified')
+          PY
+
+      - name: Verify TEST morph data
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          p = Path('overlay/Base.SC2Data/GameData/AbilData.xml')
+          root = ET.fromstring(p.read_text(encoding='utf-8'))
+          ids = {e.attrib.get('id') for e in root.findall('CAbilMorph')}
+          assert {'UpgradeToLair', 'UpgradeToHive'} <= ids
+          print('TEST Lair/Hive morph data verified')
+          PY
+
+      - name: Build StormLib v9.40
+        run: |
+          git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
+          cmake -S _StormLib -B _StormLib/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/_storm" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSTORM_USE_BUNDLED_LIBRARIES=ON \
+            -DSTORM_BUILD_TESTS=OFF
+          cmake --build _StormLib/build --config Release -j2
+          cmake --install _StormLib/build
+
+      - name: Compile MPQ helper
+        run: |
+          cc tools/mpq_replace.c \
+            -I"$PWD/_storm/include" \
+            -L"$PWD/_storm/lib" \
+            -Wl,-rpath,"$PWD/_storm/lib" \
+            -lstorm -lz \
+            -o tools/mpq_replace
+
+      - name: Build Alpha 4.4 map
+        run: |
+          mkdir -p dist
+          OUT='dist/Monobattle - 열대 해안 - Alpha4.4 TEST.SC2Map'
+          cp 'Tropic Shores 0.136.SC2Map' "$OUT"
+          tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'build/MapScript.galaxy' 'MapScript.galaxy'
+          tools/mpq_replace "$OUT" 'overlay/Base.SC2Data/GameData/AbilData.xml' 'Base.SC2Data\GameData\AbilData.xml'
+
+      - name: Verify packaged MPQ
+        run: |
+          python -m pip install --disable-pip-version-check mpyq
+          python - <<'PY'
+          from mpyq import MPQArchive
+          p = 'dist/Monobattle - 열대 해안 - Alpha4.4 TEST.SC2Map'
+          raw = MPQArchive(p).extract()
+          files = {(k.decode('utf-8','replace') if isinstance(k,bytes) else str(k)).replace('\\','/'): bytes(v) for k,v in raw.items()}
+          s = files['MapScript.galaxy'].decode('utf-8-sig')
+          for marker in (
+              'TextWithColor(StringToText("GAME MODE")',
+              'int[24] gv_mbSDFrame',
+              'PlayerGetColorIndex(targetPlayer, false)',
+              'void MB_ApplyUpgradeRestrictionsAll ()'
+          ):
+              assert marker in s, marker
+          assert 'Base.SC2Data/GameData/AbilData.xml' in files
+          print(f'Alpha 4.4 packaged MPQ verified: {len(files)} entries')
+          PY
+
+      - name: Upload Alpha 4.4 map
+        uses: actions/upload-artifact@v4
+        with:
+          name: monobattle-tropic-shores-alpha44-test
+          path: 'dist/Monobattle - 열대 해안 - Alpha4.4 TEST.SC2Map'
+          if-no-files-found: error
+          retention-days: 7
