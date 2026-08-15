@@ -45,6 +45,10 @@ src, n = choice_pattern.subn(lambda _m: choice_replacement, src, count=1)
 if n != 1:
     raise SystemExit(f'failed to replace vote choice UI: {n}')
 
+# Remove the old mode-explanation strings everywhere, including legacy setters in MB_StartVote.
+src = src.replace('BLIND RANDOM\\n종족 선택 + 즉시 추첨', 'BLIND RANDOM')
+src = src.replace('SINGLE DRAFT\\n24개 후보 드래프트', 'SINGLE DRAFT')
+
 # Hide the explanatory subtitle during the vote itself.
 start_vote_anchor = '    gv_mbVoteLocked = false;\n'
 if start_vote_anchor not in src:
@@ -150,7 +154,6 @@ src = src.replace(finish_anchor,
 # -------------------------------------------------------------------------------------------------
 # 3) Single Draft cards: use the real SC2 CommandButton visual and color only P# by team.
 # -------------------------------------------------------------------------------------------------
-# Replace the transparent generic click overlay with Blizzard's actual 76x76 command-button template.
 old_button = '''        // Transparent overlay receives clicks/tooltip and supplies a subtle selection border.
         gv_mbSDButton[i] = DialogControlCreate(gv_mbSDDialog, c_triggerControlTypeButton);
         DialogControlSetSize(gv_mbSDButton[i], PlayerGroupAll(), 88, 68);
@@ -168,22 +171,18 @@ if old_button not in src:
     raise SystemExit('transparent SD button geometry anchor missing')
 src = src.replace(old_button, new_button, 1)
 
-# Put the name cleanly below the command button.
 src = src.replace(
     'DialogControlSetPosition(gv_mbSDNameLabel[i], PlayerGroupAll(), c_anchorTopLeft, x, y + 69);',
     'DialogControlSetPosition(gv_mbSDNameLabel[i], PlayerGroupAll(), c_anchorTopLeft, x, y + 78);',
     1,
 )
 
-# Smaller picker tag in the top-right of the card; P# only, actual text color carries team identity.
 src = src.replace(
     'DialogControlSetSize(gv_mbSDPickBadge[i], PlayerGroupAll(), 96, 22);\n        DialogControlSetPosition(gv_mbSDPickBadge[i], PlayerGroupAll(), c_anchorTopLeft, x + 8, y + 4);',
     'DialogControlSetSize(gv_mbSDPickBadge[i], PlayerGroupAll(), 46, 20);\n        DialogControlSetPosition(gv_mbSDPickBadge[i], PlayerGroupAll(), c_anchorTopLeft, x + 55, y + 3);',
     1,
 )
 
-# Full board updater: render the icon directly on CommandButton, keep all untaken cards vivid for
-# everybody, and rely on MB_SDPickSlot's existing turn check to reject clicks from non-current players.
 update_pattern = re.compile(r'void MB_SDUpdateBoardButtons \(\) \{.*?\n\}\n\nvoid MB_SDUpdateOrderText', re.S)
 update_replacement = r'''void MB_SDUpdateBoardButtons () {
     int i = 0;
@@ -251,7 +250,6 @@ for marker in (
     if marker not in src:
         raise SystemExit(f'Alpha 4.2 marker missing: {marker}')
 
-# Mode descriptions must no longer leak into selection/result UI.
 for forbidden in (
     'BLIND RANDOM\\n종족 선택 + 즉시 추첨',
     'SINGLE DRAFT\\n24개 후보 드래프트',
@@ -262,7 +260,6 @@ for forbidden in (
     if forbidden in src:
         raise SystemExit(f'Alpha 4.2 stale UI text remains: {forbidden}')
 
-# Galaxy quoted strings may contain escaped \n but never literal line breaks.
 in_string = False
 escaped = False
 for i, ch in enumerate(src):
