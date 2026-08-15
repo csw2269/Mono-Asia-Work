@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Catalog>
+    <!--
+        TEST BOOST ONLY.
+        Hatchery -> Lair and Lair -> Hive are CAbilMorph abilities, not ordinary construction
+        queues. Trigger progress acceleration does not reliably affect their real morph duration,
+        so the visible/logic morph sections are shortened directly in map-local data.
+        Remove this file from release builds when QA acceleration is no longer needed.
+    -->
+    <CAbilMorph id="UpgradeToLair">
+        <InfoArray index="0">
+            <SectionArray index="Abils">
+                <DurationArray index="Delay" value="12"/>
+            </SectionArray>
+            <SectionArray index="Actor">
+                <DurationArray index="Duration" value="12"/>
+            </SectionArray>
+            <SectionArray index="Stats">
+                <DurationArray index="Delay" value="12"/>
+            </SectionArray>
+        </InfoArray>
+    </CAbilMorph>
+    <CAbilMorph id="UpgradeToHive">
+        <InfoArray index="0">
+            <SectionArray index="Abils">
+                <DurationArray index="Delay" value="12"/>
+            </SectionArray>
+            <SectionArray index="Actor">
+                <DurationArray index="Duration" value="12"/>
+            </SectionArray>
+            <SectionArray index="Stats">
+                <DurationArray index="Delay" value="12"/>
+            </SectionArray>
+        </InfoArray>
+    </CAbilMorph>
+</Catalog>
