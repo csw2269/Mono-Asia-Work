@@ -1,0 +1,90 @@
+name: Build Monobattle Alpha 3.8
+
+on:
+  push:
+    branches:
+      - 'dev/monobattle-v0.1'
+    paths:
+      - 'tools/prepare_alpha38.py'
+      - '.github/workflows/build-monobattle-alpha38.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Alpha 3.8 Galaxy source
+        run: python tools/prepare_alpha38.py
+
+      - name: Verify QA morph boost and UI markers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('build/MapScript.galaxy').read_text(encoding='utf-8')
+          for marker in (
+              'btn-unit-terran-cyclone.dds',
+              'DialogControlSetSize(gv_mbSDButton[i], PlayerGroupAll(), 84, 84)',
+              'while (slot < 32)',
+              'progress = UnitGetProgressComplete(u, slot)',
+              'UnitSetProgressComplete(u, slot, 85)',
+              '건설/생산/변태/연구 진행 85% 가속',
+              'PlayerModifyPropertyInt(p, c_playerPropMinerals, c_playerPropOperSetTo, 10000)',
+              'PlayerModifyPropertyInt(p, c_playerPropVespene, c_playerPropOperSetTo, 10000)'
+          ):
+              assert marker in s, marker
+          pulse = s[s.index('void MB_TestBoostPulseFor'):s.index('void MB_TestBoostPulseAll')]
+          assert 'UnitCheckProgressState' not in pulse
+          assert 'CatalogFieldValueCount(c_gameCatalogAbil' not in s
+          assert 'oldTime * 0.20' not in s
+          print('Alpha 3.8 source verified')
+          PY
+
+      - name: Build StormLib v9.40
+        run: |
+          git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
+          cmake -S _StormLib -B _StormLib/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/_storm" -DBUILD_SHARED_LIBS=ON -DSTORM_USE_BUNDLED_LIBRARIES=ON -DSTORM_BUILD_TESTS=OFF
+          cmake --build _StormLib/build --config Release -j2
+          cmake --install _StormLib/build
+
+      - name: Compile MPQ helper
+        run: |
+          cc tools/mpq_replace.c -I"$PWD/_storm/include" -L"$PWD/_storm/lib" -Wl,-rpath,"$PWD/_storm/lib" -lstorm -lz -o tools/mpq_replace
+
+      - name: Build Alpha 3.8 map
+        run: |
+          mkdir -p dist
+          OUT='dist/Monobattle - 열대 해안 - Alpha3.8 TEST.SC2Map'
+          cp 'Tropic Shores 0.136.SC2Map' "$OUT"
+          tools/mpq_replace "$OUT" 'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' 'koKR.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' 'enUS.SC2Data\LocalizedData\GameStrings.txt'
+          tools/mpq_replace "$OUT" 'build/MapScript.galaxy' 'MapScript.galaxy'
+
+      - name: Verify packaged MPQ
+        run: |
+          python -m pip install --disable-pip-version-check mpyq
+          python - <<'PY'
+          from mpyq import MPQArchive
+          p = 'dist/Monobattle - 열대 해안 - Alpha3.8 TEST.SC2Map'
+          raw = MPQArchive(p).extract()
+          files = {(k.decode('utf-8','replace') if isinstance(k,bytes) else str(k)).replace('\\','/'): bytes(v) for k,v in raw.items()}
+          s = files['MapScript.galaxy'].decode('utf-8-sig')
+          for marker in ('btn-unit-terran-cyclone.dds','84, 84','while (slot < 32)','UnitSetProgressComplete(u, slot, 85)'):
+              assert marker in s, marker
+          pulse = s[s.index('void MB_TestBoostPulseFor'):s.index('void MB_TestBoostPulseAll')]
+          assert 'UnitCheckProgressState' not in pulse
+          assert 'CatalogFieldValueCount(c_gameCatalogAbil' not in s
+          print('Alpha 3.8 packaged MPQ verified')
+          PY
+
+      - name: Upload Alpha 3.8 map
+        uses: actions/upload-artifact@v4
+        with:
+          name: monobattle-tropic-shores-alpha38-test
+          path: 'dist/Monobattle - 열대 해안 - Alpha3.8 TEST.SC2Map'
+          if-no-files-found: error
+          retention-days: 7
