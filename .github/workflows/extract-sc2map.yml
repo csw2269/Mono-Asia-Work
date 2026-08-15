@@ -27,7 +27,6 @@ jobs:
       - name: Extract SC2Map
         shell: python
         run: |
-          import os
           from pathlib import Path
           from mpyq import MPQArchive
 
@@ -39,12 +38,21 @@ jobs:
           files = archive.extract()
           manifest = []
 
-          for name, data in files.items():
+          for raw_name, data in files.items():
+              if isinstance(raw_name, bytes):
+                  try:
+                      name = raw_name.decode('utf-8')
+                  except UnicodeDecodeError:
+                      name = raw_name.decode('latin-1')
+              else:
+                  name = str(raw_name)
+
               safe_name = name.replace('\\', '/')
               target = out / safe_name
               target.parent.mkdir(parents=True, exist_ok=True)
-              target.write_bytes(data or b'')
-              manifest.append(f'{safe_name}\t{len(data or b"")}')
+              payload = bytes(data or b'')
+              target.write_bytes(payload)
+              manifest.append(f'{safe_name}\t{len(payload)}')
 
           (out / '_MANIFEST.tsv').write_text('\n'.join(sorted(manifest)) + '\n', encoding='utf-8')
           print(f'Extracted {len(files)} files')
