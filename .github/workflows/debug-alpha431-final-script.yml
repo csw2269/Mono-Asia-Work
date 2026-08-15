@@ -1,0 +1,25 @@
+name: Debug Alpha 4.3.1 Final Script
+
+on:
+  push:
+    branches:
+      - 'dev/monobattle-v0.1'
+    paths:
+      - '.github/workflows/debug-alpha431-final-script.yml'
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare final script
+        run: python tools/prepare_alpha431.py
+      - name: Upload final MapScript
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha431-final-mapscript
+          path: build/MapScript.galaxy
+          retention-days: 2
