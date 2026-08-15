@@ -20,6 +20,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare MapScript
+        run: |
+          mkdir -p build
+          python - <<'PY'
+          from pathlib import Path
+
+          src = Path('overlay/MapScript.galaxy').read_text(encoding='utf-8')
+          needle = '    gv_mbTimer = TimerCreate();\n'
+          count = src.count(needle)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 timer initializations before fix, got {count}')
+
+          first = src.find(needle)
+          second = src.find(needle, first + len(needle))
+          fixed = src[:second] + src[second + len(needle):]
+
+          if fixed.count(needle) != 1:
+              raise SystemExit('timer initialization hardening failed')
+          Path('build/MapScript.galaxy').write_text(fixed, encoding='utf-8', newline='\n')
+          print('Prepared MapScript with exactly one gv_mbTimer initialization')
+          PY
+
       - name: Build StormLib v9.40
         run: |
           git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
@@ -56,7 +78,7 @@ jobs:
             'enUS.SC2Data\LocalizedData\GameStrings.txt'
 
           tools/mpq_replace "$OUT" \
-            'overlay/MapScript.galaxy' \
+            'build/MapScript.galaxy' \
             'MapScript.galaxy'
 
           sha256sum 'Tropic Shores 0.136.SC2Map' "$OUT"
@@ -91,6 +113,8 @@ jobs:
           for marker in ['MB_StartVote', 'MB_StartBlind', 'MB_RerollPlayer', 'MeleeInitResources']:
               if marker not in script:
                   raise SystemExit(f'MapScript marker missing: {marker}')
+          if script.count('gv_mbTimer = TimerCreate();') != 1:
+              raise SystemExit('MapScript must contain exactly one timer initialization')
 
           ko = normalized['koKR.SC2Data/LocalizedData/GameStrings.txt'].decode('utf-8-sig')
           if 'DocInfo/Name=Monobattle - 열대 해안' not in ko:
