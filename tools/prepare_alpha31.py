@@ -9,13 +9,12 @@ path = Path('build/MapScript.galaxy')
 src = path.read_text(encoding='utf-8')
 
 # With starting units now created only AFTER selection, there is nothing to pause during
-# vote/draft. Removing UnitPauseAll also avoids the compile error reported by the live SC2 runtime.
+# vote/draft. Removing UnitPauseAll keeps pre-game selection independent of world units.
 src = src.replace('    UnitPauseAll(true);\n', '')
 src = src.replace('    UnitPauseAll(false);\n', '')
 
-# SC2 reported the compact vote-reset loop as the other compile-error site. Keep the same
-# vote initialization, but remove the per-player helper call and give everyone the default
-# labels directly. Personal "my selection" highlighting can be reintroduced after runtime QA.
+# Keep vote initialization simple for runtime QA. Personal "my selection" highlighting can be
+# reintroduced once the rest of Alpha 3 is stable.
 pattern = re.compile(
     r'    while \(p <= 8\) \{ gv_mbVote\[p\] = MB_MODE_NONE; MB_ResetVoteButtonTextFor\(p\); p \+= 1; \}\n'
 )
@@ -28,21 +27,114 @@ replacement = '''    while (p <= 8) {
     DialogControlSetPropertyAsText(gv_mbVoteSDButton, c_triggerControlPropertyText, PlayerGroupAll(),
         StringToText("SINGLE DRAFT\\n24개 후보 드래프트"));
 '''
-src, n = pattern.subn(replacement, src, count=1)
+# Use a callable replacement so Python's regex engine does NOT reinterpret \\n as a real newline.
+src, n = pattern.subn(lambda _m: replacement, src, count=1)
 if n != 1:
-    raise SystemExit(f'failed to replace reported vote-reset error site: {n}')
+    raise SystemExit(f'failed to replace reported vote-reset site: {n}')
 
-# Remove the same optional personal-label helper from click handling for this QA build.
 src = src.replace(' MB_ResetVoteButtonTextFor(p);', '')
 src = src.replace('MB_ResetVoteButtonTextFor(p); ', '')
 
+
+def escape_raw_newlines_inside_strings(text: str) -> str:
+    """Galaxy string literals may contain \\n escapes, but not literal source newlines.
+
+    Some earlier re.sub replacements converted \\n to an actual newline inside quotes, which caused
+    the SC2 parser to lose synchronization and report dozens of later lines as compile errors.
+    """
+    out = []
+    in_string = False
+    escaped = False
+    line_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+
+        if line_comment:
+            out.append(ch)
+            if ch == '\n':
+                line_comment = False
+            i += 1
+            continue
+
+        if not in_string and ch == '/' and i + 1 < len(text) and text[i + 1] == '/':
+            out.append('//')
+            line_comment = True
+            i += 2
+            continue
+
+        if in_string:
+            if ch == '\n':
+                out.append('\\n')
+                escaped = False
+                i += 1
+                continue
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        out.append(ch)
+        if ch == '"':
+            in_string = True
+            escaped = False
+        i += 1
+
+    if in_string:
+        raise SystemExit('unterminated Galaxy string literal after newline sanitization')
+    return ''.join(out)
+
+
+src = escape_raw_newlines_inside_strings(src)
+
+# Validate that no source newline remains inside a quoted string.
+def has_raw_string_newline(text: str) -> bool:
+    in_string = False
+    escaped = False
+    line_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if line_comment:
+            if ch == '\n':
+                line_comment = False
+            i += 1
+            continue
+        if not in_string and ch == '/' and i + 1 < len(text) and text[i + 1] == '/':
+            line_comment = True
+            i += 2
+            continue
+        if in_string:
+            if ch == '\n':
+                return True
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+        i += 1
+    return False
+
+
+if has_raw_string_newline(src):
+    raise SystemExit('raw newline remains inside a Galaxy string literal')
 if 'UnitPauseAll(' in src:
-    raise SystemExit('Alpha 3.1 must not call UnitPauseAll during pre-game selection')
+    raise SystemExit('Alpha 3.2 must not call UnitPauseAll during pre-game selection')
 if 'MB_ResetVoteButtonTextFor(p)' in src:
-    raise SystemExit('Alpha 3.1 must not call the reported vote-label helper')
+    raise SystemExit('Alpha 3.2 must not call the temporary vote-label helper')
 for marker in ('MB_InitStartingUnitsAll', 'MeleeInitUnitsForPlayer', 'PlayerSetRace', 'MB_UnitIcon', 'gv_mbSDNameLabel'):
     if marker not in src:
         raise SystemExit(f'Alpha 3 functionality regressed: {marker}')
 
 path.write_text(src, encoding='utf-8', newline='\n')
-print('Alpha 3.1 hardened: removed both runtime-reported compile-error call sites')
+print('Alpha 3.2 prepared: raw Galaxy string newlines fixed and validated')
