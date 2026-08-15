@@ -38,29 +38,24 @@ src = src[:m.start()] + replacement + src[m.end():]
 
 # --------------------------------------------------------------------------------------
 # 2) The viewer's own team drives the persistent screen theme.
-#    Pick-order/player-name colors continue to describe the actual picker and are intentionally
-#    left alone. Only the shell/title/accent are viewer-team themed.
+#    Hook the already-existing per-viewer team branch in MB_StartSD instead of relying on exact
+#    historical header-color constants. This survives future small color/layout changes.
 # --------------------------------------------------------------------------------------
-blue_header = '''                DialogControlSetPropertyAsColor(gv_mbSDHeaderPanel, c_triggerControlPropertyColor, one, Color(15.0, 58.0, 100.0));\n'''
-red_header = '''                DialogControlSetPropertyAsColor(gv_mbSDHeaderPanel, c_triggerControlPropertyColor, one, Color(100.0, 22.0, 15.0));\n'''
-if blue_header not in src or red_header not in src:
-    raise SystemExit('Alpha 5.2 viewer-team header tint anchors missing')
+team_branch_anchor = '''            team = MB_SDPlayerTeam(p);\n            one = PlayerGroupSingle(p);\n            if (team == 0) {\n'''
+if team_branch_anchor not in src:
+    raise SystemExit('Alpha 5.2 MB_StartSD viewer-team branch missing')
 
-blue_theme = blue_header + '''                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyColor, one, Color(3.0, 9.0, 18.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyBorderColor, one, Color(8.0, 62.0, 100.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamAccent, c_triggerControlPropertyColor, one, Color(8.0, 62.0, 100.0));\n                DialogControlSetPropertyAsText(gv_mbSDTitle, c_triggerControlPropertyText, one,\n                    TextWithColor(StringToText("SINGLE DRAFT"), Color(35.0, 72.0, 100.0)));\n'''
-red_theme = red_header + '''                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyColor, one, Color(18.0, 5.0, 4.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyBorderColor, one, Color(100.0, 14.0, 8.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamAccent, c_triggerControlPropertyColor, one, Color(100.0, 14.0, 8.0));\n                DialogControlSetPropertyAsText(gv_mbSDTitle, c_triggerControlPropertyText, one,\n                    TextWithColor(StringToText("SINGLE DRAFT"), Color(100.0, 42.0, 34.0)));\n'''
-src = src.replace(blue_header, blue_theme, 1)
-src = src.replace(red_header, red_theme, 1)
+theme_prefix = '''            team = MB_SDPlayerTeam(p);\n            one = PlayerGroupSingle(p);\n\n            // Persistent shell color follows the VIEWER'S team. Pick-order/name colors still\n            // describe the actual picker and are left untouched.\n            if (team == 0) {\n                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyColor, one, Color(3.0, 9.0, 18.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyBorderColor, one, Color(8.0, 62.0, 100.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamAccent, c_triggerControlPropertyColor, one, Color(8.0, 62.0, 100.0));\n                DialogControlSetPropertyAsText(gv_mbSDTitle, c_triggerControlPropertyText, one,\n                    TextWithColor(StringToText("SINGLE DRAFT"), Color(35.0, 72.0, 100.0)));\n            }\n            else {\n                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyColor, one, Color(18.0, 5.0, 4.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamBackdrop, c_triggerControlPropertyBorderColor, one, Color(100.0, 14.0, 8.0));\n                DialogControlSetPropertyAsColor(gv_mbSDTeamAccent, c_triggerControlPropertyColor, one, Color(100.0, 14.0, 8.0));\n                DialogControlSetPropertyAsText(gv_mbSDTitle, c_triggerControlPropertyText, one,\n                    TextWithColor(StringToText("SINGLE DRAFT"), Color(100.0, 42.0, 34.0)));\n            }\n\n            if (team == 0) {\n'''
+src = src.replace(team_branch_anchor, theme_prefix, 1)
 
 # --------------------------------------------------------------------------------------
-# 3) Remove the remaining fixed teal header default. Before team identity is applied it should be
-#    neutral dark, never Blizzard teal. Per-viewer StartSD theming immediately replaces it.
+# 3) Remove fixed teal defaults where present. Before MB_StartSD applies per-viewer colors, the
+#    shell is neutral dark instead of looking like Blizzard's stock interface.
 # --------------------------------------------------------------------------------------
 src = src.replace(
     'DialogControlSetPropertyAsColor(gv_mbSDHeaderPanel, c_triggerControlPropertyColor, PlayerGroupAll(), Color(20.0, 55.0, 75.0));',
     'DialogControlSetPropertyAsColor(gv_mbSDHeaderPanel, c_triggerControlPropertyColor, PlayerGroupAll(), Color(24.0, 24.0, 28.0));',
 )
-
-# Keep the initial title neutral until MB_StartSD assigns each viewer a team theme.
 src = src.replace(
     'TextWithColor(StringToText("SINGLE DRAFT"), Color(45.0, 82.0, 100.0))',
     'TextWithColor(StringToText("SINGLE DRAFT"), Color(82.0, 82.0, 86.0))',
@@ -92,7 +87,6 @@ for marker in (
     if marker not in src:
         raise SystemExit(f'Alpha 5.3 marker missing: {marker}')
 
-# The SD dialog itself must no longer use the stock low-transparency chrome.
 if 'DialogSetTransparency(gv_mbSDDialog, 5.0)' in src:
     raise SystemExit('Alpha 5.3 still exposes Blizzard default SD dialog chrome')
 
