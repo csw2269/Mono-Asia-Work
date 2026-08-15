@@ -1,0 +1,93 @@
+name: Build Monobattle Smoke Map
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout development branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev/monobattle-v0.1
+
+      - name: Build StormLib v9.40
+        run: |
+          git clone --depth 1 --branch v9.40 https://github.com/ladislav-zezula/StormLib.git _StormLib
+          cmake -S _StormLib -B _StormLib/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/_storm" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSTORM_USE_BUNDLED_LIBRARIES=ON \
+            -DWITH_BUNDLED_LIBTOMCRYPT=ON \
+            -DSTORM_BUILD_TESTS=OFF
+          cmake --build _StormLib/build --config Release -j2
+          cmake --install _StormLib/build
+          find _storm -maxdepth 3 -type f | sort
+
+      - name: Compile MPQ replacement helper
+        run: |
+          cc tools/mpq_replace.c \
+            -I"$PWD/_storm/include" \
+            -L"$PWD/_storm/lib" \
+            -Wl,-rpath,"$PWD/_storm/lib" \
+            -lstorm -lz -lbz2 \
+            -o tools/mpq_replace
+
+      - name: Build smoke map
+        run: |
+          mkdir -p dist
+          cp 'Tropic Shores 0.136.SC2Map' 'dist/Monobattle - 열대 해안 - smoke.SC2Map'
+
+          tools/mpq_replace \
+            'dist/Monobattle - 열대 해안 - smoke.SC2Map' \
+            'overlay/koKR.SC2Data/LocalizedData/GameStrings.txt' \
+            'koKR.SC2Data\\LocalizedData\\GameStrings.txt'
+
+          tools/mpq_replace \
+            'dist/Monobattle - 열대 해안 - smoke.SC2Map' \
+            'overlay/enUS.SC2Data/LocalizedData/GameStrings.txt' \
+            'enUS.SC2Data\\LocalizedData\\GameStrings.txt'
+
+          sha256sum 'Tropic Shores 0.136.SC2Map' 'dist/Monobattle - 열대 해안 - smoke.SC2Map'
+
+      - name: Verify rebuilt MPQ
+        run: |
+          python -m pip install --disable-pip-version-check mpyq
+          python - <<'PY'
+          from mpyq import MPQArchive
+          from pathlib import Path
+
+          p = Path('dist/Monobattle - 열대 해안 - smoke.SC2Map')
+          a = MPQArchive(str(p))
+          files = a.extract()
+
+          def get(name):
+              for k, v in files.items():
+                  key = k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)
+                  if key.replace('\\', '/') == name:
+                      return bytes(v).decode('utf-8-sig')
+              raise SystemExit(f'missing {name}')
+
+          ko = get('koKR.SC2Data/LocalizedData/GameStrings.txt')
+          en = get('enUS.SC2Data/LocalizedData/GameStrings.txt')
+          assert 'DocInfo/Name=Monobattle - 열대 해안' in ko
+          assert 'DocInfo/Name=Monobattle - Tropic Shores' in en
+          assert 'MapScript.galaxy' in [
+              (k.decode('utf-8', 'replace') if isinstance(k, bytes) else str(k)).replace('\\', '/')
+              for k in files
+          ]
+          print(f'Verified {len(files)} MPQ entries')
+          PY
+
+      - name: Upload smoke map
+        uses: actions/upload-artifact@v4
+        with:
+          name: monobattle-tropic-shores-smoke
+          path: 'dist/Monobattle - 열대 해안 - smoke.SC2Map'
+          if-no-files-found: error
+          retention-days: 7
