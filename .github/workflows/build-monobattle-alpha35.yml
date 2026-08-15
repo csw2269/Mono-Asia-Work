@@ -32,7 +32,7 @@ jobs:
           bad_d = r'Assets\Textures\btn-unit-protoss-disruptor.dds'
           assert good_a in s and good_d in s
           assert bad_a not in s and bad_d not in s
-          for marker in ('MB_ApplySupportRulesAll','MB_CheckTeamVictory','MB_CreateRosterUI'):
+          for marker in ('MB_ApplySupportRulesAll','MB_CheckVictory','MB_CreateRosterUI'):
               assert marker in s, marker
           print('Final Galaxy source contains escaped texture paths and Alpha 3.4 gameplay rules')
           PY
@@ -68,7 +68,7 @@ jobs:
           s = files['MapScript.galaxy'].decode('utf-8-sig')
           assert r'Assets\\Textures\\btn-unit-protoss-adept.dds' in s
           assert r'Assets\\Textures\\btn-unit-protoss-disruptor.dds' in s
-          assert 'MB_CheckTeamVictory' in s
+          assert 'MB_CheckVictory' in s
           assert 'MB_ApplySupportRulesAll' in s
           print('Alpha 3.5 packaged MPQ verified')
           PY
