@@ -1,0 +1,12 @@
+status	role	latest_va	aug_va	external_ghidra_current	local_crosscheck	p1b_use	literal_vt_status	note
+VERIFIED	poll_or_recv	0x63f83050	0x63f83170	pluto-re [V] lifecycle+actions	current role + prior mnemonic correspondence	implemented behavior slice	OPEN	not a VT score
+VERIFIED	mod_onStart	0x63f85f90	0x63f86dd0	pluto-re [V] lifecycle	current role + prior unique prefix	lifecycle engine-start subset only	OPEN	full body not transcribed
+VERIFIED	handle_response	0x63f8a9f0	0x63f8b9d0	pluto-re [V] actions	current call graph	not yet transcribed	OPEN	stale/revalidation path deferred
+VERIFIED	mod_onFrame	0x63f8baf0	0x63f8c8e0	pluto-re [V] lifecycle+actions	prior unique 50-mnemonic prefix	timing contract only	OPEN	full body deferred
+INFERRED	BwAccessor::enumerate	0x63fb3f70 region	0x63fb4920	pluto-re observation region	ngram localization only	not implemented	OPEN	exact source boundary/name not promoted
+VERIFIED	ProcClient::sendFeatures	0x63fb4bc0	0x63fb5440	pluto-re [V] PLSM/pipe writer	>=120 prior mnemonic-prefix recheck	implemented	OPEN	payload ordering exact
+VERIFIED	ProcClient::launch	0x63fb5420	0x63fb5c60	pluto-re [V] lifecycle	>=120 prior mnemonic-prefix recheck	implemented	OPEN	error-string minutiae not claimed byte-identical
+VERIFIED	ProcClient::shutdown	0x63fb7190	0x63fb79f0	pluto-re [V] lifecycle	>=120 prior mnemonic-prefix recheck	implemented	OPEN	quit/event/3s/terminate path
+VERIFIED	DeferredTurnBufferSink::queueCommand	0x63faf100	0x63fafb10	pluto-re [V] actions	>=120 prior mnemonic-prefix recheck	implemented	OPEN	vector storage semantics
+VERIFIED	AgentState::act	0x63faf4b0	0x63fafed0	pluto-re [V] actions	>=120 prior mnemonic-prefix recheck	minimal a=0/a=8 only	OPEN	full action decoder deferred
+VERIFIED	command emitter	0x63fb8770	0x63fb8fd0	pluto-re [V] disassembly	current raw packet trace	minimal Stop only	OPEN	Ghidra decompiler failed here; external analysis used objdump

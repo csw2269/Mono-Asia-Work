@@ -1,0 +1,102 @@
+name: Pluto P1B CI
+
+on:
+  push:
+    branches:
+      - pluto-source-recovery-p1b
+    paths:
+      - "pluto_source_recovery_p1b/**"
+      - ".github/workflows/pluto-p1b-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p pluto_source_recovery_p1b/ci_logs/linux
+          cmake -S pluto_source_recovery_p1b -B build-p1b 2>&1 | tee pluto_source_recovery_p1b/ci_logs/linux/configure.log
+      - name: Build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build-p1b -j2 2>&1 | tee pluto_source_recovery_p1b/ci_logs/linux/build.log
+      - name: Test
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build-p1b --output-on-failure 2>&1 | tee pluto_source_recovery_p1b/ci_logs/linux/ctest.log
+          python3 pluto_source_recovery_p1b/tools/check_protocol_layout.py 2>&1 | tee pluto_source_recovery_p1b/ci_logs/linux/layout.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p1b-linux-logs
+          path: pluto_source_recovery_p1b/ci_logs/linux
+
+  windows-x86:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Win32
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pluto_source_recovery_p1b/ci_logs/windows | Out-Null
+          cmake -S pluto_source_recovery_p1b -B build-p1b-win32 -G "Visual Studio 17 2022" -A Win32 *>&1 | Tee-Object pluto_source_recovery_p1b/ci_logs/windows/configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Win32
+        shell: pwsh
+        run: |
+          cmake --build build-p1b-win32 --config Release *>&1 | Tee-Object pluto_source_recovery_p1b/ci_logs/windows/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test Win32
+        shell: pwsh
+        run: |
+          ctest --test-dir build-p1b-win32 -C Release --output-on-failure *>&1 | Tee-Object pluto_source_recovery_p1b/ci_logs/windows/ctest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: p1b-windows-x86-logs
+          path: pluto_source_recovery_p1b/ci_logs/windows
+
+  checkpoint:
+    needs: [linux-host, windows-x86]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: p1b-*-logs
+          path: pluto_source_recovery_p1b/ci_logs
+          merge-multiple: false
+      - name: Build checkpoint archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p pluto_source_recovery_p1b/evidence
+          {
+            echo "linux-host=${{ needs.linux-host.result }}"
+            echo "windows-x86=${{ needs.windows-x86.result }}"
+            echo "commit=${GITHUB_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+          } > pluto_source_recovery_p1b/evidence/CI_STATUS.txt
+          (
+            cd pluto_source_recovery_p1b
+            find . -type f ! -name CHECKPOINT_FILES.sha256 -print0 | sort -z | xargs -0 sha256sum > evidence/CHECKPOINT_FILES.sha256
+          )
+          zip -r PLUTO_SOURCE_RECOVERY_CHECKPOINT_P1B_20261007.zip pluto_source_recovery_p1b -x "*/build-*/*"
+          sha256sum PLUTO_SOURCE_RECOVERY_CHECKPOINT_P1B_20261007.zip > PLUTO_SOURCE_RECOVERY_CHECKPOINT_P1B_20261007.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pluto-p1b-checkpoint
+          path: |
+            PLUTO_SOURCE_RECOVERY_CHECKPOINT_P1B_20261007.zip
+            PLUTO_SOURCE_RECOVERY_CHECKPOINT_P1B_20261007.zip.sha256
